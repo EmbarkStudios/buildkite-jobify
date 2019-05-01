@@ -1,11 +1,11 @@
 //use failure::{Error, ResultExt};
 //use futures::executor::ThreadPool;
-use tokio_threadpool::ThreadPool;
 use graphql_client::{GraphQLQuery, Response};
 use log::{info, warn, error};
 use serde::{de::DeserializeOwned, Serialize};
-
-const API_URL: &str = "https://graphql.buildkite.com/v1";
+use std::collections::BTreeMap;
+use tokio::await;
+use tokio_threadpool::ThreadPool;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -26,7 +26,7 @@ struct OrgAccess;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "buildkite/schema.json",
-    query_path = "buildkite/builds.gql",
+    query_path = "buildkite/jobs.gql",
     response_derives = "Debug"
 )]
 struct FindPipeline;
@@ -34,10 +34,18 @@ struct FindPipeline;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "buildkite/schema.json",
-    query_path = "buildkite/builds.gql",
+    query_path = "buildkite/jobs.gql",
     response_derives = "Debug"
 )]
 struct GetBuilds;
+
+#[derive(GraphQLQuery)]
+#[graphql(
+    schema_path = "buildkite/schema.json",
+    query_path = "buildkite/jobs.gql",
+    response_derives = "Debug"
+)]
+struct GetCurrentJobs;
 
 #[derive(Fail, Debug)]
 pub enum BkErr {
@@ -71,7 +79,7 @@ fn send_request<Req: Serialize, Res: DeserializeOwned>(
     client: &reqwest::Client,
     req: &Req,
 ) -> Result<Option<Res>, BkErr> {
-    let mut res = client.post(API_URL).json(req).send()?;
+    let mut res = client.post(crate::BK_API_URL).json(req).send()?;
 
     let res: Response<Res> = res.json().map_err(|e| BkErr::from(e))?;
 
@@ -123,7 +131,7 @@ impl From<&get_builds::BuildStates> for BuildStates {
     }
 }
 
-#[derive(PartialEq)]
+#[derive(Debug, PartialEq)]
 pub enum JobStates {
     /// The job has just been created and doesn't have a state yet
     Pending,
@@ -167,11 +175,11 @@ pub enum JobStates {
     Unknown,
 }
 
-impl From<&get_builds::JobStates> for JobStates {
-    fn from(js: &get_builds::JobStates) -> Self {
-        use get_builds::JobStates as JS;
+impl From<get_current_jobs::JobStates> for JobStates {
+    fn from(js: get_current_jobs::JobStates) -> Self {
+        use get_current_jobs::JobStates as JS;
 
-        match *js {
+        match js {
             JS::PENDING => JobStates::Pending,
             JS::WAITING => JobStates::Waiting,
             JS::WAITING_FAILED => JobStates::WaitingFailed,
@@ -196,9 +204,14 @@ impl From<&get_builds::JobStates> for JobStates {
     }
 }
 
+#[derive(Debug)]
 pub struct Job {
-    /// UUID
-    pub id: String,
+    /// The job's UUID
+    pub uuid: String,
+    /// The job's friendly identifier
+    pub label: String,
+    /// The containing build's UUID
+    pub build_uuid: String,
     /// The exit code for the job, if it has finished execution
     pub exit_status: Option<i32>,
     /// The current state of the job
@@ -222,24 +235,27 @@ impl Job {
     }
 }
 
+#[derive(Debug)]
 pub struct Build {
     /// UUID
-    pub id: String,
-    /// Current state of the build
-    pub state: BuildStates,
-    /// Sequence number
-    pub number: i64,
-    /// The list of jobs in the build
-    pub jobs: Vec<Job>,
+    pub uuid: String,
+    /// Metadata attached to the build
+    pub metadata: BTreeMap<String, String>,
 }
 
-pub struct Builds(pub Vec<Build>);
+pub struct Jobs {
+    pub jobs: Vec<Job>,
+    pub builds: Vec<Build>,
+    pub pipeline: String,
+    pub org: String,
+}
 
 // Monitors Buildkite's GraphQL API for events of interest
 pub struct Monitor {
     // The organization identifier, this can be specified exactly or queried
     // from Buildkite during initialization
     org_id: String,
+    org_slug: String,
     client: reqwest::Client,
     //pool: ThreadPool,
 }
@@ -277,20 +293,22 @@ impl Monitor {
             return Err(BkErr::InvalidOrgId(id));
         }
 
-        match res_id.on {
+        let slug = match res_id.on {
             org_access::OrgAccessNodeOn::Organization(org) => {
                 info!(
                     "created monitor for organization {}({})",
                     org.slug, res_id.id
                 );
+
+                org.slug
             }
             _ => return Err(BkErr::InvalidOrgId(id)),
-        }
+        };
 
         Ok(Self {
             org_id: id,
+            org_slug: slug,
             client,
-            //pool: ThreadPool::new(),
         })
     }
 
@@ -301,7 +319,7 @@ impl Monitor {
 
         let client = reqwest::Client::new();
         let mut res = client
-            .post(API_URL)
+            .post(crate::BK_API_URL)
             .bearer_auth(&token)
             .json(&req_body)
             .send()?;
@@ -318,7 +336,11 @@ impl Monitor {
         Self::with_org_id(token, id.id)
     }
 
-    pub fn watch(&self, pipeline: &str) -> Result<futures::channel::mpsc::Receiver<Builds>, BkErr> {
+    pub fn client(&self) -> reqwest::Client {
+        self.client.clone()
+    }
+
+    pub fn watch(&self, pipeline: &str) -> Result<futures::channel::mpsc::Receiver<Jobs>, BkErr> {
         use futures::future::{FutureExt, TryFutureExt};
         use tokio::prelude::StreamAsyncExt;
 
@@ -369,18 +391,19 @@ impl Monitor {
             ..
         } = pipeline;
 
-        info!(
-            "watching pipeline {}({}) '{}'",
-            pipeline_name,
-            pipeline_id,
-            pipeline_description.unwrap_or_default()
-        );
-
         let (mut tx, rx) = futures::channel::mpsc::channel(100);
 
         let client = self.client.clone();
+        let org_slug = self.org_slug.clone();
 
-        let future03 = async move {
+        let poll = async move {
+            info!(
+                "watching pipeline {}({}) '{}'",
+                pipeline_name,
+                pipeline_id,
+                pipeline_description.unwrap_or_default()
+            );
+
             // Currently we just poll aggressively, a better option would be to add
             // a webhook for the `job.scheduled` event that invokes a cloud function, which
             // then posts a cloud pubsub message that we listen to instead as it should
@@ -392,124 +415,123 @@ impl Monitor {
             let mut failure_count = 0u8;
 
             while let Some(_) = await!(interval.next()) {
-                let req_body = GetBuilds::build_query(get_builds::Variables {
-                    id: pipeline_id.clone(),
-                });
-
-                let res_body: Option<get_builds::ResponseData> = match send_request(&client, &req_body) {
-                    Ok(rb) => {
+                let jobs = match get_builds(&client, &pipeline_id) {
+                    Ok(builds) => {
                         failure_count = 0;
-                        rb
+
+                        match builds {
+                            Some((jobs, builds)) => Jobs {
+                                builds,
+                                jobs,
+                                pipeline: pipeline_name.clone(),
+                                org: org_slug.clone(),
+                            },
+                            None => continue,
+                        }
                     }
                     Err(err) => {
                         failure_count += 1;
 
                         if failure_count >= 5 {
-                            error!("stopping GetBuilds query for {}, too many failures: {}", pipeline_name, err);
+                            error!("stopping query for {}, too many failures: {}", pipeline_name, err);
                             break;
                         } else {
-                            warn!("failed to send GetBuilds query {}: {}", failure_count, err);
+                            warn!("failed to send query {}: {}", failure_count, err);
                             continue;
                         }
                     }
                 };
 
-                let builds = match res_body.and_then(|root|
-                    if let Some(node) = root.node {
-                        match node.on {
-                            get_builds::GetBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
-                            _ => None,
-                        }
-                    } else {
-                        None
-                    }
-                ).and_then(|builds| {
-                    if let Some(mut edges) = builds.edges {
-                        let mut builds = Vec::with_capacity(builds.count as usize);
-
-                        for build in edges.iter().filter_map(|n| n.as_ref().and_then(|n| n.node.as_ref())) {
-                            
-                            let jobs = match build.jobs {
-                                Some(ref node) => {
-                                    match node.edges {
-                                        Some(ref job_edges) => {
-                                            let mut jobs = Vec::with_capacity(node.count as usize);
-
-                                            for job in job_edges.iter().filter_map(|n| n.as_ref().and_then(|n| n.node.as_ref())) {
-                                                match job {
-                                                    get_builds::GetBuildsNodeOnPipelineBuildsEdgesNodeJobsEdgesNode::JobTypeCommand(job) => {
-                                                        jobs.push(Job {
-                                                            id: job.id.clone(),
-                                                            state: (&job.state).into(),
-                                                            query_rules: job.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
-                                                            exit_status: job.exit_status.as_ref().and_then(|s| s.parse::<i32>().ok()),
-                                                        });
-                                                    }
-                                                    get_builds::GetBuildsNodeOnPipelineBuildsEdgesNodeJobsEdgesNode::JobTypeWait(job) => {
-                                                        jobs.push(Job {
-                                                            id: job.id.clone(),
-                                                            state: (&job.state).into(),
-                                                            query_rules: String::new(),
-                                                            exit_status: None,
-                                                        });
-                                                    }
-                                                    _ => {}
-                                                }
-                                                
-                                            }
-
-                                            jobs
-                                        },
-                                        None => continue,
-                                    }
-                                }
-                                None => continue,
-                            };
-
-                            builds.push(Build {
-                                id: build.id.clone(),
-                                state: (&build.state).into(), // The GraphQL state enum is not Copy :(
-                                number: build.number,
-                                jobs,
-                            });
-                        }
-
-                        if !builds.is_empty() {
-                            Some(builds)
-                        } else {
-                            None
-                        }
-                    } else {
-                        None
-                    }
-                }) {
-                    Some(builds) => Builds(builds),
-                    None => continue,
-                };
-
                 // Try to send to our channel, if it fails it means the receiver
                 // was dropped and we can stop polling
-                if tx.try_send(builds).is_err() {
-                    info!(
-                        "stopped watching pipeline {}({})",
-                        pipeline_name,
-                        pipeline_id,
-                    );
+                if tx.try_send(jobs).is_err() {
                     break;
                 }
             }
+
+            info!(
+                "stopped watching pipeline {}({})",
+                pipeline_name,
+                pipeline_id,
+            );
         };
 
-        // let future01 = future03
-        //     .unit_error()
-        //     .boxed()
-        //     .compat();
+        let poll = poll
+            .unit_error()
+            .boxed()
+            .compat();
 
-        tokio::spawn_async(future03);
-        //self.pool.spawn(future01);
+        tokio::spawn(poll);
 
         Ok(rx)
     }
+}
+
+fn get_builds(client: &reqwest::Client, pipeline_id: &String) -> Result<Option<(Vec<Job>, Vec<Build>)>, BkErr> {
+    let req_body = GetCurrentJobs::build_query(get_current_jobs::Variables {
+        id: pipeline_id.clone(),
+    });
+
+    let res_body: Option<get_current_jobs::ResponseData> = send_request(&client, &req_body)?;
+
+    let jobs = res_body.and_then(|root|
+        if let Some(node) = root.node {
+            match node.on {
+                get_current_jobs::GetCurrentJobsNodeOn::Pipeline(pipeline) => pipeline.jobs,
+                _ => None,
+            }
+        } else {
+            None
+        }
+    ).and_then(|in_jobs| {
+        if let Some(mut edges) = in_jobs.edges {
+            let mut jobs = Vec::with_capacity(in_jobs.count as usize);
+            // Most likely we'll have duplicate builds, but meh
+            let mut builds = Vec::<Build>::with_capacity(in_jobs.count as usize);
+
+            for job in edges.into_iter().filter_map(|n| n.and_then(|n| n.node)) {
+                match job {
+                    get_current_jobs::GetCurrentJobsNodeOnPipelineJobsEdgesNode::JobTypeCommand(job) => {
+                        if let Some(build) = job.build {
+                            let build_uuid = build.uuid;
+
+                            jobs.push(Job {
+                                uuid: job.uuid,
+                                label: job.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
+                                state: job.state.into(),
+                                query_rules: job.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
+                                exit_status: None,
+                                build_uuid: build_uuid.clone(),
+                            });
+
+                            // Insert unique builds
+                            if let Err(ind) = builds.binary_search_by(|b| b.uuid.cmp(&build_uuid)) {
+                                builds.insert(ind, Build {
+                                    uuid: build_uuid,
+                                    metadata: build.meta_data.and_then(|md| md.edges)
+                                        .map(|md| md.into_iter().filter_map(|e| {
+                                            e.and_then(|e| e.node.and_then(|n| Some((n.key, n.value))))
+                                        }).collect())
+                                        .unwrap_or_default(),
+                                });
+                            }
+                        }
+                    },
+                    _ => unreachable!(),
+                }
+            }
+
+            if !jobs.is_empty() && !builds.is_empty() {
+                Some((jobs, builds))
+            } else {
+                None
+            }
+        } else {
+            None
+        }
+    });
+
+    Ok(jobs)
 }
 
 #[cfg(test)]
