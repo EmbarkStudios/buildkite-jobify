@@ -1,0 +1,127 @@
+# Finds a pipeline by its name, the search is extremely
+# limited, so we get up to 10 matches and find the one
+# we actually want from that
+query FindPipeline($org: ID!, $name: String!) {
+  node(id: $org) {
+    __typename
+    ... on Organization {
+      pipelines(first: 10, search: $name) {
+        edges {
+          node {
+            id
+            name
+            description
+            repository {
+              url
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Get all running builds and their jobs
+query GetBuilds($id: ID!) {
+  node(id: $id) {
+  __typename
+      ... on Pipeline {
+      builds(first: 100, state: [RUNNING]) {
+        count
+        edges {
+          node {
+            uuid
+            message
+            state
+            metaData(first: 10) {
+              count
+              edges {
+                node {
+                  key
+                  value
+                }
+              }
+            }
+            triggeredFrom {
+              build {
+                uuid
+                metaData(first: 10) {
+                  count
+                  edges {
+                    node {
+                      key
+                      value
+                    }
+                  }
+                }
+              }
+            }
+            jobs(first: 100) {
+              count
+              edges {
+                node {
+                  __typename
+                  ... on JobTypeCommand {
+                    uuid
+                    label
+                    state
+                    agentQueryRules
+                    agent {
+                      name
+                    }
+                  }
+                }
+              }
+              pageInfo {
+                hasNextPage
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}
+
+# Gets (hopefully) all of the currently scheduled jobs that are ready
+# to be executed, but are waiting on an agent to pick them up. This also
+# retrieves a few details from the parent Build that the job is a part of
+query GetCurrentJobs($id: ID!) {
+  node(id: $id) {
+    __typename
+    ... on Pipeline {
+      jobs(state: [SCHEDULED, RUNNING, ACCEPTED, ASSIGNED], type: [COMMAND], first: 500) {
+        count
+        edges {
+          node {
+            __typename
+            ... on JobTypeCommand {
+              uuid
+              label
+              state
+              agentQueryRules
+              agent {
+                name
+              }
+              build {
+                uuid
+                metaData(first: 10) {
+                  count
+                  edges {
+                    node {
+                      key
+                      value
+                    }
+                  }
+                }
+              }
+            }
+          }
+        }
+        pageInfo {
+          hasNextPage
+        }
+      }
+    }
+  }
+}

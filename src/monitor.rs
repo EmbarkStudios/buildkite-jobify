@@ -1,11 +1,11 @@
 //use failure::{Error, ResultExt};
 //use futures::executor::ThreadPool;
 use graphql_client::{GraphQLQuery, Response};
-use log::{info, warn, error};
+use log::{error, info, warn};
+use reqwest::r#async::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use std::collections::BTreeMap;
 use tokio::await;
-use tokio_threadpool::ThreadPool;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -38,6 +38,8 @@ struct FindPipeline;
     response_derives = "Debug"
 )]
 struct GetBuilds;
+
+//use crate::queries::jobs::*;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -75,13 +77,13 @@ impl From<reqwest::Error> for BkErr {
     }
 }
 
-fn send_request<Req: Serialize, Res: DeserializeOwned>(
-    client: &reqwest::Client,
-    req: &Req,
+async fn send_request<'a, Req: Serialize, Res: DeserializeOwned + std::marker::Unpin>(
+    client: &'a Client,
+    req: &'a Req,
 ) -> Result<Option<Res>, BkErr> {
-    let mut res = client.post(crate::BK_API_URL).json(req).send()?;
+    let mut res = await!(client.post(crate::BK_API_URL).json(req).send())?;
 
-    let res: Response<Res> = res.json().map_err(|e| BkErr::from(e))?;
+    let res: Response<Res> = await!(res.json()).map_err(|e| BkErr::from(e))?;
 
     // TODO: Errors!
 
@@ -175,9 +177,9 @@ pub enum JobStates {
     Unknown,
 }
 
-impl From<get_current_jobs::JobStates> for JobStates {
-    fn from(js: get_current_jobs::JobStates) -> Self {
-        use get_current_jobs::JobStates as JS;
+impl From<get_builds::JobStates> for JobStates {
+    fn from(js: get_builds::JobStates) -> Self {
+        use get_builds::JobStates as JS;
 
         match js {
             JS::PENDING => JobStates::Pending,
@@ -219,19 +221,26 @@ pub struct Job {
     /// The agent query rules used to determine which agents
     /// can pick this job up
     query_rules: String,
+    /// The name of the agent the job was assigned to
+    pub agent: Option<String>,
 }
 
 impl Job {
-    pub fn iter_query_rules(&self) -> impl Iterator<Item = (&str, &str)> {
-        self.query_rules.split(',')
-            .filter_map(|rule| {
-                let mut i = rule.splitn(2, '=');
+    pub fn iter_query_rules(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
+        self.query_rules.split(',').filter_map(|rule| {
+            let mut i = rule.splitn(2, '=');
 
-                match (i.next(), i.next()) {
-                    (Some(k), Some(v)) => Some((k, v)),
-                    _ => None,
+            match (i.next(), i.next()) {
+                (Some(k), Some(v)) => {
+                    if v.is_empty() || v == "*" {
+                        Some((k, None))
+                    } else {
+                        Some((k, Some(v)))
+                    }
                 }
-            })
+                _ => None,
+            }
+        })
     }
 }
 
@@ -241,10 +250,12 @@ pub struct Build {
     pub uuid: String,
     /// Metadata attached to the build
     pub metadata: BTreeMap<String, String>,
+    /// The commit message that triggered the build
+    pub message: Option<String>,
+    pub jobs: Vec<Job>,
 }
 
-pub struct Jobs {
-    pub jobs: Vec<Job>,
+pub struct Builds {
     pub builds: Vec<Build>,
     pub pipeline: String,
     pub org: String,
@@ -256,12 +267,11 @@ pub struct Monitor {
     // from Buildkite during initialization
     org_id: String,
     org_slug: String,
-    client: reqwest::Client,
-    //pool: ThreadPool,
+    client: Client,
 }
 
 impl Monitor {
-    pub fn with_org_id(token: String, id: String) -> Result<Monitor, BkErr> {
+    pub async fn with_org_id(token: String, id: String) -> Result<Monitor, BkErr> {
         use http::{header::AUTHORIZATION, HeaderMap};
         let mut headers = HeaderMap::new();
 
@@ -273,14 +283,14 @@ impl Monitor {
                 .map_err(BkErr::Http)?,
         );
 
-        let client = reqwest::ClientBuilder::new()
+        let client = reqwest::r#async::ClientBuilder::new()
             .default_headers(headers)
             .build()?;
 
         // Verify the id is correct and we have access to it
         let req_body = OrgAccess::build_query(org_access::Variables { id: id.clone() });
 
-        let res_body: Option<org_access::ResponseData> = send_request(&client, &req_body)?;
+        let res_body: Option<org_access::ResponseData> = await!(send_request(&client, &req_body))?;
 
         // Just verify the ids match as a sanity check, the operation
         // completing without an error is enough to know we can
@@ -312,19 +322,19 @@ impl Monitor {
         })
     }
 
-    pub fn with_org_slug(token: String, slug: &str) -> Result<Monitor, BkErr> {
+    pub async fn with_org_slug(token: String, slug: &str) -> Result<Monitor, BkErr> {
         let req_body = OrgId::build_query(org_id::Variables {
             slug: slug.to_owned(),
         });
 
-        let client = reqwest::Client::new();
-        let mut res = client
+        let client = Client::new();
+        let mut res = await!(client
             .post(crate::BK_API_URL)
             .bearer_auth(&token)
             .json(&req_body)
-            .send()?;
+            .send())?;
 
-        let res_body: Response<org_id::ResponseData> = res.json()?;
+        let res_body: Response<org_id::ResponseData> = await!(res.json())?;
 
         let id = res_body
             .data
@@ -333,14 +343,17 @@ impl Monitor {
 
         info!("resolved slug '{}' to id '{}'", slug, id.id);
 
-        Self::with_org_id(token, id.id)
+        await!(Self::with_org_id(token, id.id))
     }
 
-    pub fn client(&self) -> reqwest::Client {
+    pub fn client(&self) -> Client {
         self.client.clone()
     }
 
-    pub fn watch(&self, pipeline: &str) -> Result<futures::channel::mpsc::Receiver<Jobs>, BkErr> {
+    pub async fn watch<'a>(
+        &'a self,
+        pipeline: &'a str,
+    ) -> Result<futures::channel::mpsc::Receiver<Builds>, BkErr> {
         use futures::future::{FutureExt, TryFutureExt};
         use tokio::prelude::StreamAsyncExt;
 
@@ -349,7 +362,8 @@ impl Monitor {
             name: pipeline.to_owned(),
         });
 
-        let res_body: Option<find_pipeline::ResponseData> = send_request(&self.client, &req_body)?;
+        let res_body: Option<find_pipeline::ResponseData> =
+            await!(send_request(&self.client, &req_body))?;
 
         let pipeline = res_body
             .and_then(|root| {
@@ -415,14 +429,13 @@ impl Monitor {
             let mut failure_count = 0u8;
 
             while let Some(_) = await!(interval.next()) {
-                let jobs = match get_builds(&client, &pipeline_id) {
+                let jobs = match await!(get_builds(&client, &pipeline_id)) {
                     Ok(builds) => {
                         failure_count = 0;
 
                         match builds {
-                            Some((jobs, builds)) => Jobs {
+                            Some(builds) => Builds {
                                 builds,
-                                jobs,
                                 pipeline: pipeline_name.clone(),
                                 org: org_slug.clone(),
                             },
@@ -433,7 +446,10 @@ impl Monitor {
                         failure_count += 1;
 
                         if failure_count >= 5 {
-                            error!("stopping query for {}, too many failures: {}", pipeline_name, err);
+                            error!(
+                                "stopping query for {}, too many failures: {}",
+                                pipeline_name, err
+                            );
                             break;
                         } else {
                             warn!("failed to send query {}: {}", failure_count, err);
@@ -451,15 +467,11 @@ impl Monitor {
 
             info!(
                 "stopped watching pipeline {}({})",
-                pipeline_name,
-                pipeline_id,
+                pipeline_name, pipeline_id,
             );
         };
 
-        let poll = poll
-            .unit_error()
-            .boxed()
-            .compat();
+        let poll = poll.unit_error().boxed().compat();
 
         tokio::spawn(poll);
 
@@ -467,71 +479,141 @@ impl Monitor {
     }
 }
 
-fn get_builds(client: &reqwest::Client, pipeline_id: &String) -> Result<Option<(Vec<Job>, Vec<Build>)>, BkErr> {
-    let req_body = GetCurrentJobs::build_query(get_current_jobs::Variables {
+async fn get_builds<'a>(
+    client: &'a Client,
+    pipeline_id: &'a String,
+) -> Result<Option<Vec<Build>>, BkErr> {
+    let req_body = GetBuilds::build_query(get_builds::Variables {
         id: pipeline_id.clone(),
     });
 
-    let res_body: Option<get_current_jobs::ResponseData> = send_request(&client, &req_body)?;
+    let res_body: Option<get_builds::ResponseData> = await!(send_request(&client, &req_body))?;
 
-    let jobs = res_body.and_then(|root|
-        if let Some(node) = root.node {
-            match node.on {
-                get_current_jobs::GetCurrentJobsNodeOn::Pipeline(pipeline) => pipeline.jobs,
-                _ => None,
-            }
-        } else {
-            None
-        }
-    ).and_then(|in_jobs| {
-        if let Some(mut edges) = in_jobs.edges {
-            let mut jobs = Vec::with_capacity(in_jobs.count as usize);
-            // Most likely we'll have duplicate builds, but meh
-            let mut builds = Vec::<Build>::with_capacity(in_jobs.count as usize);
-
-            for job in edges.into_iter().filter_map(|n| n.and_then(|n| n.node)) {
-                match job {
-                    get_current_jobs::GetCurrentJobsNodeOnPipelineJobsEdgesNode::JobTypeCommand(job) => {
-                        if let Some(build) = job.build {
-                            let build_uuid = build.uuid;
-
-                            jobs.push(Job {
-                                uuid: job.uuid,
-                                label: job.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
-                                state: job.state.into(),
-                                query_rules: job.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
-                                exit_status: None,
-                                build_uuid: build_uuid.clone(),
-                            });
-
-                            // Insert unique builds
-                            if let Err(ind) = builds.binary_search_by(|b| b.uuid.cmp(&build_uuid)) {
-                                builds.insert(ind, Build {
-                                    uuid: build_uuid,
-                                    metadata: build.meta_data.and_then(|md| md.edges)
-                                        .map(|md| md.into_iter().filter_map(|e| {
-                                            e.and_then(|e| e.node.and_then(|n| Some((n.key, n.value))))
-                                        }).collect())
-                                        .unwrap_or_default(),
-                                });
-                            }
-                        }
-                    },
-                    _ => unreachable!(),
+    let builds = res_body
+        .and_then(|root| {
+            if let Some(node) = root.node {
+                match node.on {
+                    get_builds::GetBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
+                    _ => None,
                 }
-            }
-
-            if !jobs.is_empty() && !builds.is_empty() {
-                Some((jobs, builds))
             } else {
                 None
             }
-        } else {
-            None
-        }
-    });
+        })
+        .and_then(|in_builds| in_builds.edges)
+        .and_then(|builds| {
+            let builds: Vec<_> = builds
+                .into_iter()
+                .filter_map(|n| n.and_then(|n| n.node))
+                .filter_map(|build| {
+                    let uuid = build.uuid;
 
-    Ok(jobs)
+                    let jobs: Option<Vec<_>> = build.jobs.and_then(|jn| jn.edges)
+                        .map(|jobs| {
+                            jobs.into_iter()
+                                .filter_map(|e| e.and_then(|n| n.node))
+                                .filter_map(|job| {
+                                    match job {
+                                        get_builds::GetBuildsNodeOnPipelineBuildsEdgesNodeJobsEdgesNode::JobTypeCommand(cmd) => {
+                                            Some(Job {
+                                                uuid: cmd.uuid,
+                                                build_uuid: uuid.clone(),
+                                                label: cmd.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
+                                                state: cmd.state.into(),
+                                                query_rules: cmd.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
+                                                exit_status: None,
+                                                agent: cmd.agent.and_then(|a| a.name),
+                                            })
+                                        }
+                                        _ => None
+                                    }
+                                }).collect()
+                        });
+
+                    let jobs = match jobs {
+                        Some(ref j) if j.is_empty() => return None,
+                        None => return None,
+                        Some(j) => j,
+                    };
+
+                    // Fill out the metadata for the build, if we've been triggered by another build
+                    // add its metadata first and then override them if they're also set on this build
+                    let metadata = {
+                        let mut meta = BTreeMap::new();
+
+                        if let Some(md) = build.triggered_from.and_then(|tf| tf.build.and_then(|b| b.meta_data.and_then(|md| md.edges))) {
+                            meta.extend(md.into_iter().filter_map(|e| {
+                                e.and_then(|e| e.node.and_then(|kv| Some((kv.key, kv.value))))
+                            }));
+                        }
+
+                        if let Some(md) = build.meta_data.and_then(|md| md.edges) {
+                            meta.extend(md.into_iter().filter_map(|e| {
+                                e.and_then(|e| e.node.and_then(|kv| Some((kv.key, kv.value))))
+                            }));
+                        }
+
+                        meta
+                    };
+
+                    Some(Build {
+                        jobs,
+                        metadata,
+                        message: build.message,
+                        uuid: uuid,
+                    })
+                })
+                .collect();
+
+            if !builds.is_empty() {
+                Some(builds)
+            } else {
+                None
+            }
+            // let mut jobs = Vec::with_capacity(in_jobs.count as usize);
+            // // Most likely we'll have duplicate builds, but meh
+            // let mut builds = Vec::<Build>::with_capacity(in_jobs.count as usize);
+
+            // for job in edges.into_iter().filter_map(|n| n.and_then(|n| n.node)) {
+            //     match job {
+            //         get_current_jobs::GetCurrentJobsNodeOnPipelineJobsEdgesNode::JobTypeCommand(job) => {
+            //             if let Some(build) = job.build {
+            //                 let build_uuid = build.uuid;
+
+            //                 jobs.push(Job {
+            //                     uuid: job.uuid,
+            //                     label: job.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
+            //                     state: job.state.into(),
+            //                     query_rules: job.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
+            //                     exit_status: None,
+            //                     build_uuid: build_uuid.clone(),
+            //                 });
+
+            //                 // Insert unique builds
+            //                 if let Err(ind) = builds.binary_search_by(|b| b.uuid.cmp(&build_uuid)) {
+            //                     builds.insert(ind, Build {
+            //                         uuid: build_uuid,
+            //                         metadata: build.meta_data.and_then(|md| md.edges)
+            //                             .map(|md| md.into_iter().filter_map(|e| {
+            //                                 e.and_then(|e| e.node.and_then(|n| Some((n.key, n.value))))
+            //                             }).collect())
+            //                             .unwrap_or_default(),
+            //                     });
+            //                 }
+            //             }
+            //         },
+            //         _ => unreachable!(),
+            //     }
+            // }
+
+            // if !jobs.is_empty() && !builds.is_empty() {
+            //     Some((jobs, builds))
+            // } else {
+            //     None
+            // }
+        });
+
+    Ok(builds)
 }
 
 #[cfg(test)]

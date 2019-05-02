@@ -1,0 +1,8 @@
+query GetArtifact($id: ID!) {
+  artifact(uuid: $id) {
+    path
+    downloadURL
+    sha1sum
+    size
+  }
+}

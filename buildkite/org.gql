@@ -1,0 +1,15 @@
+query OrgId($slug: ID!) {
+  organization(slug: $slug) {
+    id
+  }
+}
+
+query OrgAccess($id: ID!) {
+  node(id: $id) {
+    id
+    __typename
+    ... on Organization {
+      slug
+    }
+  }
+}
