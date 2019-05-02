@@ -1,0 +1,6 @@
+organization = "embark-studios"
+api_token = "put_a_buildkite_api_token_with_graphql_enabled_here"
+pipelines = [
+    "pipeline-slug-1",
+    "pipeline-slug-2",
+]
