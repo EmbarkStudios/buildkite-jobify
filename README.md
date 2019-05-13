@@ -1,4 +1,6 @@
 # buildkite-jobify
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FEmbarkStudios%2Fbuildkite-jobify.svg?type=shield)](https://app.fossa.io/projects/git%2Bgithub.com%2FEmbarkStudios%2Fbuildkite-jobify?ref=badge_shield)
+
 
 Watches 1 or more Buildkite pipelines via the GraphQL API to kick off temporary Kubernetes jobs that (presumably)
 spin up Buildkite agents to pick up the Buildkite jobs that Buildkite has scheduled but not yet found an agent for.
@@ -50,3 +52,6 @@ echo "--- Uploading :pipeline:"
 # Upload our main pipeline to kick off the rest of the build
 buildkite-agent pipeline upload "$(dirname "$0")/pipeline.yml"
 ```
+
+## License
+[![FOSSA Status](https://app.fossa.io/api/projects/git%2Bgithub.com%2FEmbarkStudios%2Fbuildkite-jobify.svg?type=large)](https://app.fossa.io/projects/git%2Bgithub.com%2FEmbarkStudios%2Fbuildkite-jobify?ref=badge_large)
