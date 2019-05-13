@@ -3,6 +3,13 @@ name = "buildkite-jobify"
 version = "0.1.0"
 authors = ["Jake Shadle <jake.shadle@embark-studios.com>"]
 edition = "2018"
+description = "" # TODO:
+license = "MIT/Apache-2.0"
+repository = "https://github.com/EmbarkStudios/buildkite-jobify"
+readme = "README.md"
+keywords = [] # TODO: fill in before publishing
+categories = [] # TODO: fill in before publishing
+publish = false # not yet
 
 [dependencies]
 crossbeam = "0.7.1"

@@ -3,8 +3,8 @@
 Watches 1 or more Buildkite pipelines via the GraphQL API to kick off temporary Kubernetes jobs that (presumably)
 spin up Buildkite agents to pick up the Buildkite jobs that Buildkite has scheduled but not yet found an agent for.
 
-
 ## Repository Setup
+
 The configuration of the Kubernetes jobs specs and the which agent tags correspond to them are expected to be
 stored in the repositories that the pipelines are attached to, thus keeping the CI configuration within that repository.
 
@@ -50,3 +50,19 @@ echo "--- Uploading :pipeline:"
 # Upload our main pipeline to kick off the rest of the build
 buildkite-agent pipeline upload "$(dirname "$0")/pipeline.yml"
 ```
+
+## License
+
+Licensed under either of
+
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+
+at your option.
+
+### Contribution
+
+Unless you explicitly state otherwise, any contribution intentionally
+submitted for inclusion in the work by you, as defined in the Apache-2.0
+license, shall be dual licensed as above, without any additional terms or
+conditions.  
