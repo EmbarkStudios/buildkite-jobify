@@ -1,4 +1,4 @@
-# buildkite-jobify
+# 👷 buildkite-jobify
 
 Watches 1 or more Buildkite pipelines via the GraphQL API to kick off temporary Kubernetes jobs that (presumably)
 spin up Buildkite agents to pick up the Buildkite jobs that Buildkite has scheduled but not yet found an agent for.
