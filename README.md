@@ -1,5 +1,8 @@
 # 👷 buildkite-jobify
 
+[![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4%20adopted-ff69b4.svg)](CODE_OF_CONDUCT.md)
+[![Embark](https://img.shields.io/badge/embark-open%20source-blueviolet.svg)](http://embark.games)
+
 Watches 1 or more Buildkite pipelines via the GraphQL API to kick off temporary Kubernetes jobs that (presumably)
 spin up Buildkite agents to pick up the Buildkite jobs that Buildkite has scheduled but not yet found an agent for.
 
@@ -50,6 +53,12 @@ echo "--- Uploading :pipeline:"
 # Upload our main pipeline to kick off the rest of the build
 buildkite-agent pipeline upload "$(dirname "$0")/pipeline.yml"
 ```
+
+## Contributing
+
+We welcome community contributions to this project.
+
+Please read our [Contributor Guide](CONTRIBUTING.md) for more information on how to get started.
 
 ## License
 
