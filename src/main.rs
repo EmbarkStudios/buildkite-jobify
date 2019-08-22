@@ -7,7 +7,7 @@ use serde_derive::Deserialize;
 use std::path::PathBuf;
 use structopt::StructOpt;
 use structopt_flags::LogLevel;
-use tokio::await;
+use tokio::await as async_wait;
 
 #[derive(Deserialize)]
 struct Config {
@@ -15,6 +15,8 @@ struct Config {
     organization: Option<String>,
     /// The API token used for communicating with the Buildkite API, **must** have GraphQL enabled
     api_token: Option<String>,
+    /// The namespace under which kubernetes jobs are created
+    namespace: Option<String>,
     /// The list of pipelines within the organization to watch
     pipelines: Vec<String>,
 }
@@ -35,6 +37,9 @@ struct Opts {
     /// or the `BUILDKITE_API_TOKEN` environment variable
     #[structopt(short = "t", long = "api-token")]
     api_token: Option<String>,
+    /// The namespace under which kubernetes jobs are created. Defaults to "buildkite".
+    #[structopt(short = "n", long = "namespace")]
+    namespace: Option<String>,
     /// The pipeline(s) to watch for builds
     #[structopt(name = "PIPELINE")]
     pipelines: Vec<String>,
@@ -72,6 +77,7 @@ async fn main() {
             None => Config {
                 organization: None,
                 api_token: None,
+                namespace: None,
                 pipelines: Vec::new(),
             },
         };
@@ -82,6 +88,10 @@ async fn main() {
 
         if let Some(token) = args.api_token {
             cfg.api_token = Some(token);
+        }
+
+        if let Some(ns) = args.namespace {
+            cfg.namespace = Some(ns);
         }
 
         if !args.pipelines.is_empty() {
@@ -109,10 +119,10 @@ async fn main() {
             bail!("no pipelines were provided");
         }
 
-        Ok((org, api_token, cfg.pipelines))
+        Ok((org, api_token, cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()), cfg.pipelines))
     };
 
-    let (org, token, pipelines) = match get_cfg() {
+    let (org, token, namespace, pipelines) = match get_cfg() {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("{}", e);
@@ -120,15 +130,15 @@ async fn main() {
         }
     };
 
-    let start: Result<_, Error> = await!(async {
-        let monitor = await!(Monitor::with_org_slug(token.clone(), &org,))
+    let start: Result<_, Error> = async_wait!(async {
+        let monitor = async_wait!(Monitor::with_org_slug(token.clone(), &org,))
             .map_err(|e| format_err!("failed to create buildkite organization monitor: {}", e))?;
-        let jobifier = Jobifier::create(token)
+        let jobifier = Jobifier::create(token, namespace)
             .map_err(|e| format_err!("failed to create k8s jobifier: {}", e))?;
         let scheduler = Scheduler::new(monitor, jobifier);
 
         for pipeline in pipelines {
-            await!(scheduler.watch(&pipeline))
+            async_wait!(scheduler.watch(&pipeline))
                 .map_err(|e| format_err!("failed to watch pipeline '{}': {}", pipeline, e))?;
         }
 
@@ -143,5 +153,5 @@ async fn main() {
         }
     };
 
-    await!(scheduler.wait());
+    async_wait!(scheduler.wait());
 }

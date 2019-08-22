@@ -21,8 +21,10 @@ query FindPipeline($org: ID!, $name: String!) {
   }
 }
 
-# Get all running builds and their jobs
-query GetBuilds($id: ID!) {
+# Get all of the currently running builds and the commits
+# they are running on, as a faster way to get all of the builds
+# we are interested in
+query GetRunningBuilds($id: ID!) {
   node(id: $id) {
   __typename
       ... on Pipeline {
@@ -31,8 +33,30 @@ query GetBuilds($id: ID!) {
         edges {
           node {
             uuid
+            commit
+          }
+        }
+      }
+    }
+  }
+}
+
+# There is a window between a job finishing and the build finishing
+# where we could miss the exit status of the job, so do an additional
+# query with all all of the builds that are still running, as well
+# as any builds that have failed since we last checked
+query GetBuilds($id: ID!, $commits: [String!]) {
+  node(id: $id) {
+  __typename
+      ... on Pipeline {
+      builds(first: 100, commit: $commits, state: [RUNNING, FAILED]) {
+        count
+        edges {
+          node {
+            uuid
             message
             state
+            commit
             metaData(first: 10) {
               count
               edges {
@@ -66,6 +90,7 @@ query GetBuilds($id: ID!) {
                     label
                     state
                     agentQueryRules
+                    exitStatus
                     agent {
                       name
                     }

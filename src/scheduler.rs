@@ -8,7 +8,7 @@ use futures::{
     sink::SinkExt,
     stream::StreamExt,
 };
-use tokio::await;
+use tokio::await as async_wait;
 
 pub struct Scheduler {
     monitor: Monitor,
@@ -32,18 +32,18 @@ impl Scheduler {
     }
 
     pub async fn watch<'a>(&'a self, pipeline: &'a str) -> Result<(), Error> {
-        let mut channel = await!(self.monitor.watch(pipeline)).map_err(Error::Buildkite)?;
+        let mut channel = async_wait!(self.monitor.watch(pipeline)).map_err(Error::Buildkite)?;
         let mut enqueue = self.jobifier.queue();
         let mut waiter = self.waiter.0.clone();
 
         let schedule = async move {
-            while let Some(builds) = await!(channel.next()) {
-                if await!(enqueue.send(builds)).is_err() {
+            while let Some(builds) = async_wait!(channel.next()) {
+                if async_wait!(enqueue.send(builds)).is_err() {
                     break;
                 }
             }
 
-            let _ = await!(waiter.send(()));
+            let _ = async_wait!(waiter.send(()));
         };
 
         let schedule = schedule.unit_error().boxed().compat();
@@ -54,6 +54,6 @@ impl Scheduler {
     }
 
     pub async fn wait(mut self) {
-        while let Some(_) = await!(self.waiter.1.next()) {}
+        while let Some(_) = async_wait!(self.waiter.1.next()) {}
     }
 }

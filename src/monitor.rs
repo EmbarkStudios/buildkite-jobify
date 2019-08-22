@@ -1,11 +1,15 @@
 //use failure::{Error, ResultExt};
-//use futures::executor::ThreadPool;
+use futures::{
+    compat::{Future01CompatExt, Stream01CompatExt},
+    stream::StreamExt,
+};
 use graphql_client::{GraphQLQuery, Response};
 use log::{error, info, warn};
 use reqwest::r#async::Client;
 use serde::{de::DeserializeOwned, Serialize};
-use std::collections::BTreeMap;
-use tokio::await;
+use std::{collections::BTreeMap, fmt};
+use tokio::await as async_wait;
+use uuid::Uuid;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -39,28 +43,24 @@ struct FindPipeline;
 )]
 struct GetBuilds;
 
-//use crate::queries::jobs::*;
-
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "buildkite/schema.json",
     query_path = "buildkite/jobs.gql",
     response_derives = "Debug"
 )]
-struct GetCurrentJobs;
+struct GetRunningBuilds;
 
 #[derive(Fail, Debug)]
 pub enum BkErr {
-    // #[fail(display = "Input was invalid UTF-8 at index {}", _0)]
-    // Utf8Error(usize),
     #[fail(display = "Invalid header value specified {}", _0)]
-    Http(#[fail(cause)] http::header::InvalidHeaderValue),
+    InvalidHttpHeader(#[fail(cause)] http::header::InvalidHeaderValue),
+    #[fail(display = "HTTP error: {}", _0)]
+    Http(reqwest::Error),
     #[fail(display = "Reqwest failure {}", _0)]
     Reqwest(#[fail(cause)] reqwest::Error),
-    // #[fail(display = "{}", _0)]
-    // Io(#[fail(cause)] io::Error),
-    #[fail(display = "Failed to deserialize value {}", _0)]
-    Serde(#[fail(cause)] serde::de::value::Error),
+    #[fail(display = "Failed to deserialize json value {}", _0)]
+    Json(#[fail(cause)] serde_json::error::Error),
     #[fail(display = "Failed to find organization {}", _0)]
     UnknownOrg(String),
     #[fail(display = "Invalid organization id {}", _0)]
@@ -69,6 +69,10 @@ pub enum BkErr {
     UnknownPipeline(String),
     #[fail(display = "Failed to create threadpool {}", _0)]
     Threadpool(#[fail(cause)] std::io::Error),
+    #[fail(display = "Request error(s) {}", _0)]
+    Request(#[fail(cause)] GraphQLErrors),
+    #[fail(display = "Invalid response: {}", _0)]
+    InvalidResponse(String),
 }
 
 impl From<reqwest::Error> for BkErr {
@@ -77,20 +81,78 @@ impl From<reqwest::Error> for BkErr {
     }
 }
 
-async fn send_request<'a, Req: Serialize, Res: DeserializeOwned + std::marker::Unpin>(
-    client: &'a Client,
-    req: &'a Req,
-) -> Result<Option<Res>, BkErr> {
-    let mut res = await!(client.post(crate::BK_API_URL).json(req).send())?;
-
-    let res: Response<Res> = await!(res.json()).map_err(|e| BkErr::from(e))?;
-
-    // TODO: Errors!
-
-    Ok(res.data)
+#[derive(Fail, Debug)]
+pub struct GraphQLErrors {
+    errors: Vec<graphql_client::Error>,
 }
 
-#[derive(PartialEq)]
+impl fmt::Display for GraphQLErrors {
+    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+        f.debug_list().entries(self.errors.iter()).finish()
+    }
+}
+
+async fn send_request<'a, Req: Serialize, Res: DeserializeOwned + std::marker::Unpin + std::fmt::Debug>(
+    client: &'a Client,
+    req: &'a Req,
+    hash: Option<u64>,
+) -> Result<(Option<Res>, Option<u64>), BkErr> {
+    use std::hash::Hasher;
+    use tokio::prelude::StreamAsyncExt;
+
+    let res = async_wait!(client.post(crate::BK_API_URL)
+        .json(req).send())?;
+
+    let res = res.error_for_status().map_err(BkErr::Http)?;
+
+    let content_type = res.headers().get(http::header::CONTENT_TYPE);
+    if content_type != Some(&http::header::HeaderValue::from_static("application/json; charset=utf-8")) {
+        return Err(BkErr::InvalidResponse(format!("invalid content-type: {:?}", content_type)));
+    }
+
+    let mut json_body = Vec::with_capacity(res.content_length().unwrap_or(1024) as usize);
+    let mut res_body = res.into_body();
+
+    while let Some(chunk) = async_wait!(res_body.next()) {
+        let chunk = chunk.map_err(|e| BkErr::from(e))?;
+        json_body.extend_from_slice(&chunk[..])
+    }
+
+    let new_hash = {
+        let mut hasher = twox_hash::XxHash::default();
+        hasher.write(&json_body);
+        Some(hasher.finish())
+    };
+
+    if hash.is_some() && new_hash == hash {
+        return Ok((None, new_hash));
+    }
+
+    let res: Response<Res> = serde_json::from_slice(&json_body).map_err(|e| {
+        error!("json error for response: {:?}", String::from_utf8(json_body));
+        BkErr::Json(e)
+    })?;
+
+    if let Some(errs) = res.errors {
+        return Err(BkErr::Request(GraphQLErrors { errors: errs }));
+    }
+
+    Ok((res.data, new_hash))
+}
+
+macro_rules! parse_uuid {
+    ($uuid_str:expr) => {
+        match Uuid::parse_str($uuid_str) {
+            Ok(u) => u,
+            Err(err) => {
+                error!("failed to parse Buildkite UUID '{}': {}", $uuid_str, err);
+                return None;
+            }
+        };
+    };
+}
+
+#[derive(Debug, PartialEq)]
 pub enum BuildStates {
     /// The build was skipped
     Skipped,
@@ -114,11 +176,11 @@ pub enum BuildStates {
     Unknown,
 }
 
-impl From<&get_builds::BuildStates> for BuildStates {
-    fn from(bs: &get_builds::BuildStates) -> Self {
+impl From<get_builds::BuildStates> for BuildStates {
+    fn from(bs: get_builds::BuildStates) -> Self {
         use get_builds::BuildStates as BS;
 
-        match *bs {
+        match bs {
             BS::SKIPPED => BuildStates::Skipped,
             BS::SCHEDULED => BuildStates::Scheduled,
             BS::RUNNING => BuildStates::Running,
@@ -208,12 +270,12 @@ impl From<get_builds::JobStates> for JobStates {
 
 #[derive(Debug)]
 pub struct Job {
-    /// The job's UUID
-    pub uuid: String,
+    /// Unique identifier for the job
+    pub uuid: Uuid,
     /// The job's friendly identifier
     pub label: String,
     /// The containing build's UUID
-    pub build_uuid: String,
+    pub build_uuid: Uuid,
     /// The exit code for the job, if it has finished execution
     pub exit_status: Option<i32>,
     /// The current state of the job
@@ -246,15 +308,41 @@ impl Job {
 
 #[derive(Debug)]
 pub struct Build {
-    /// UUID
-    pub uuid: String,
+    /// Unique identifier for the build
+    pub uuid: Uuid,
     /// Metadata attached to the build
     pub metadata: BTreeMap<String, String>,
     /// The commit message that triggered the build
     pub message: Option<String>,
+    /// The commit identifier the build pertains to
+    pub commit: String,
+    /// The current state of the build
+    pub state: BuildStates,
+    /// The list of currently known jobs in the build
     pub jobs: Vec<Job>,
 }
 
+impl std::cmp::PartialOrd for Build {
+    fn partial_cmp(&self, other: &Build) -> Option<std::cmp::Ordering> {
+        Some(self.uuid.cmp(&other.uuid))
+    }
+}
+
+impl std::cmp::Ord for Build {
+    fn cmp(&self, other: &Build) -> std::cmp::Ordering {
+        self.uuid.cmp(&other.uuid)
+    }
+}
+
+impl std::cmp::PartialEq for Build {
+    fn eq(&self, other: &Build) -> bool {
+        self.uuid == other.uuid
+    }
+}
+
+impl std::cmp::Eq for Build {}
+
+//#[derive(Clone)]
 pub struct Builds {
     pub builds: Vec<Build>,
     pub pipeline: String,
@@ -270,6 +358,32 @@ pub struct Monitor {
     client: Client,
 }
 
+#[derive(Clone)]
+struct KnownBuild {
+    uuid: Uuid,
+    commit: String,
+}
+
+impl std::cmp::PartialOrd for KnownBuild {
+    fn partial_cmp(&self, other: &KnownBuild) -> Option<std::cmp::Ordering> {
+        Some(self.uuid.cmp(&other.uuid))
+    }
+}
+
+impl std::cmp::Ord for KnownBuild {
+    fn cmp(&self, other: &KnownBuild) -> std::cmp::Ordering {
+        self.uuid.cmp(&other.uuid)
+    }
+}
+
+impl std::cmp::PartialEq for KnownBuild {
+    fn eq(&self, other: &KnownBuild) -> bool {
+        self.uuid == other.uuid
+    }
+}
+
+impl std::cmp::Eq for KnownBuild {}
+
 impl Monitor {
     pub async fn with_org_id(token: String, id: String) -> Result<Monitor, BkErr> {
         use http::{header::AUTHORIZATION, HeaderMap};
@@ -280,7 +394,7 @@ impl Monitor {
             AUTHORIZATION,
             format!("Bearer {}", token)
                 .parse::<http::header::HeaderValue>()
-                .map_err(BkErr::Http)?,
+                .map_err(BkErr::InvalidHttpHeader)?,
         );
 
         let client = reqwest::r#async::ClientBuilder::new()
@@ -290,7 +404,7 @@ impl Monitor {
         // Verify the id is correct and we have access to it
         let req_body = OrgAccess::build_query(org_access::Variables { id: id.clone() });
 
-        let res_body: Option<org_access::ResponseData> = await!(send_request(&client, &req_body))?;
+        let (res_body, _) = async_wait!(send_request::<_, org_access::ResponseData>(&client, &req_body, None))?;
 
         // Just verify the ids match as a sanity check, the operation
         // completing without an error is enough to know we can
@@ -328,13 +442,13 @@ impl Monitor {
         });
 
         let client = Client::new();
-        let mut res = await!(client
+        let mut res = async_wait!(client
             .post(crate::BK_API_URL)
             .bearer_auth(&token)
             .json(&req_body)
             .send())?;
 
-        let res_body: Response<org_id::ResponseData> = await!(res.json())?;
+        let res_body: Response<org_id::ResponseData> = async_wait!(res.json())?;
 
         let id = res_body
             .data
@@ -343,7 +457,7 @@ impl Monitor {
 
         info!("resolved slug '{}' to id '{}'", slug, id.id);
 
-        await!(Self::with_org_id(token, id.id))
+        async_wait!(Self::with_org_id(token, id.id))
     }
 
     pub fn client(&self) -> Client {
@@ -362,8 +476,8 @@ impl Monitor {
             name: pipeline.to_owned(),
         });
 
-        let res_body: Option<find_pipeline::ResponseData> =
-            await!(send_request(&self.client, &req_body))?;
+        let (res_body, _) =
+            async_wait!(send_request::<_, find_pipeline::ResponseData>(&self.client, &req_body, None))?;
 
         let pipeline = res_body
             .and_then(|root| {
@@ -427,11 +541,17 @@ impl Monitor {
                 tokio_timer::Interval::new_interval(std::time::Duration::from_secs(1));
 
             let mut failure_count = 0u8;
+            let mut query_hash = None;
+            let mut known_builds = Vec::new();
+            const MAX_FAILURES: u8 = 100;
 
-            while let Some(_) = await!(interval.next()) {
-                let jobs = match await!(get_builds(&client, &pipeline_id)) {
+            while let Some(_) = async_wait!(interval.next()) {
+                let builds = match async_wait!(get_builds(&client, &pipeline_id, &mut known_builds, &mut query_hash)) {
                     Ok(builds) => {
-                        failure_count = 0;
+                        if failure_count > 0 {
+                            info!("successfully sent query after {} failures", failure_count);
+                            failure_count = 0;
+                        }
 
                         match builds {
                             Some(builds) => Builds {
@@ -445,7 +565,7 @@ impl Monitor {
                     Err(err) => {
                         failure_count += 1;
 
-                        if failure_count >= 5 {
+                        if failure_count >= MAX_FAILURES {
                             error!(
                                 "stopping query for {}, too many failures: {}",
                                 pipeline_name, err
@@ -460,7 +580,7 @@ impl Monitor {
 
                 // Try to send to our channel, if it fails it means the receiver
                 // was dropped and we can stop polling
-                if tx.try_send(jobs).is_err() {
+                if tx.try_send(builds).is_err() {
                     break;
                 }
             }
@@ -482,12 +602,54 @@ impl Monitor {
 async fn get_builds<'a>(
     client: &'a Client,
     pipeline_id: &'a String,
+    known_builds: &'a mut Vec<KnownBuild>,
+    query_hash: &'a mut Option<u64>,
 ) -> Result<Option<Vec<Build>>, BkErr> {
-    let req_body = GetBuilds::build_query(get_builds::Variables {
+    let req_body = GetRunningBuilds::build_query(get_running_builds::Variables {
         id: pipeline_id.clone(),
     });
 
-    let res_body: Option<get_builds::ResponseData> = await!(send_request(&client, &req_body))?;
+    let (res_body, _hash) = async_wait!(send_request::<_, get_running_builds::ResponseData>(&client, &req_body, None))?;
+
+    let builds_to_check = res_body
+        .and_then(|root| root.node)
+        .and_then(|node| {
+            match node.on {
+                get_running_builds::GetRunningBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
+                _ => None,
+            }
+        })
+        .and_then(|in_builds| in_builds.edges)
+        .and_then(|builds| {
+            let builds: Vec<_> = builds
+                .into_iter()
+                .filter_map(|n| n.and_then(|n| n.node))
+                .filter_map(|build| {
+                    Some(KnownBuild {
+                        uuid: parse_uuid!(&build.uuid),
+                        commit: build.commit,
+                    })
+                }).collect();
+
+            Some(builds)
+        });
+
+    let commits: Vec<_> = known_builds.iter().map(|kb| kb.commit.clone())
+        .chain(builds_to_check.unwrap_or_else(|| Vec::new()).into_iter().map(|kb| kb.commit)).collect();
+
+    let req_body = GetBuilds::build_query(get_builds::Variables {
+        id: pipeline_id.clone(),
+        commits: Some(commits)
+    });
+
+    let (res_body, hash) = async_wait!(send_request::<_, get_builds::ResponseData>(&client, &req_body, *query_hash))?;
+
+    // Don't bother sending an update to jobifier if the Buildkite state hasn't changed
+    if *query_hash == hash {
+        return Ok(None);
+    }
+
+    *query_hash = hash;
 
     let builds = res_body
         .and_then(|root| {
@@ -502,11 +664,11 @@ async fn get_builds<'a>(
         })
         .and_then(|in_builds| in_builds.edges)
         .and_then(|builds| {
-            let builds: Vec<_> = builds
+            let mut builds: Vec<_> = builds
                 .into_iter()
                 .filter_map(|n| n.and_then(|n| n.node))
                 .filter_map(|build| {
-                    let uuid = build.uuid;
+                    let uuid = parse_uuid!(&build.uuid);
 
                     let jobs: Option<Vec<_>> = build.jobs.and_then(|jn| jn.edges)
                         .map(|jobs| {
@@ -516,12 +678,12 @@ async fn get_builds<'a>(
                                     match job {
                                         get_builds::GetBuildsNodeOnPipelineBuildsEdgesNodeJobsEdgesNode::JobTypeCommand(cmd) => {
                                             Some(Job {
-                                                uuid: cmd.uuid,
+                                                uuid: parse_uuid!(&cmd.uuid),
                                                 build_uuid: uuid.clone(),
                                                 label: cmd.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
                                                 state: cmd.state.into(),
                                                 query_rules: cmd.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
-                                                exit_status: None,
+                                                exit_status: cmd.exit_status.and_then(|es| es.parse::<i32>().ok()),
                                                 agent: cmd.agent.and_then(|a| a.name),
                                             })
                                         }
@@ -560,58 +722,35 @@ async fn get_builds<'a>(
                         jobs,
                         metadata,
                         message: build.message,
+                        commit: build.commit,
                         uuid: uuid,
+                        state: build.state.into(),
                     })
                 })
                 .collect();
+
+            builds.sort();
 
             if !builds.is_empty() {
                 Some(builds)
             } else {
                 None
             }
-            // let mut jobs = Vec::with_capacity(in_jobs.count as usize);
-            // // Most likely we'll have duplicate builds, but meh
-            // let mut builds = Vec::<Build>::with_capacity(in_jobs.count as usize);
-
-            // for job in edges.into_iter().filter_map(|n| n.and_then(|n| n.node)) {
-            //     match job {
-            //         get_current_jobs::GetCurrentJobsNodeOnPipelineJobsEdgesNode::JobTypeCommand(job) => {
-            //             if let Some(build) = job.build {
-            //                 let build_uuid = build.uuid;
-
-            //                 jobs.push(Job {
-            //                     uuid: job.uuid,
-            //                     label: job.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
-            //                     state: job.state.into(),
-            //                     query_rules: job.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
-            //                     exit_status: None,
-            //                     build_uuid: build_uuid.clone(),
-            //                 });
-
-            //                 // Insert unique builds
-            //                 if let Err(ind) = builds.binary_search_by(|b| b.uuid.cmp(&build_uuid)) {
-            //                     builds.insert(ind, Build {
-            //                         uuid: build_uuid,
-            //                         metadata: build.meta_data.and_then(|md| md.edges)
-            //                             .map(|md| md.into_iter().filter_map(|e| {
-            //                                 e.and_then(|e| e.node.and_then(|n| Some((n.key, n.value))))
-            //                             }).collect())
-            //                             .unwrap_or_default(),
-            //                     });
-            //                 }
-            //             }
-            //         },
-            //         _ => unreachable!(),
-            //     }
-            // }
-
-            // if !jobs.is_empty() && !builds.is_empty() {
-            //     Some((jobs, builds))
-            // } else {
-            //     None
-            // }
         });
+
+    known_builds.clear();
+
+    if let Some(ref builds) = builds {
+        known_builds.extend(builds.iter().filter_map(|b| {
+            match b.state {
+                BuildStates::Running => Some(KnownBuild {
+                    uuid: b.uuid.clone(),
+                    commit: b.commit.clone(),
+                }),
+                _ => None,
+            }
+        }))
+    }
 
     Ok(builds)
 }

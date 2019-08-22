@@ -2,8 +2,8 @@
 
 #[macro_use]
 extern crate failure;
-#[macro_use]
-extern crate serde_derive;
+#[macro_use(Deserialize, Serialize)]
+extern crate serde;
 
 pub mod jobifier;
 pub mod monitor;

@@ -1,6 +1,6 @@
 [package]
 name = "buildkite-jobify"
-version = "0.1.0"
+version = "0.3.1"
 authors = ["Jake Shadle <jake.shadle@embark-studios.com>"]
 edition = "2018"
 description = "" # TODO:
@@ -19,26 +19,29 @@ graphql_client = "0.7.0"
 http = "0.1.17"
 log = "0.4.6"
 lru_time_cache = "0.9.0"
-reqwest = "0.9.15"
-serde = "1.0.90"
-serde_derive = "1.0.90"
+reqwest = "0.9.17"
+serde = "1.0.91"
+serde_derive = "1.0.91"
 serde_json = "1.0.39"
-serde_yaml = "0.8.8"
-tar = "0.4.23"
-tokio-timer = "0.2.10"
-toml = "0.5.0"
+serde_yaml = "0.8.9"
+tar = "0.4.25"
+tokio-timer = "0.2.11"
+toml = "0.5.1"
 smush = { version = "0.1.4", default-features = false, features = ["gzip_support"] }
 structopt = "0.2.15"
 structopt-flags = "0.3.1"
+twox-hash = "1.3.0"
+uuid = { version = "0.7.4", default-features = false, features = ["v4"] }
 
 [dependencies.futures]
-version = "0.3.0-alpha.14"
+version = "=0.3.0-alpha.14"
 package = "futures-preview"
 features = ["compat"]
 
 [dependencies.kubernetes]
 git = "https://github.com/EmbarkStudios/kubernetes-rust.git"
-rev = "4f4868b1628a57b763cf7589845298ff51088103"
+rev = "3091491"
+#path = "../kubernetes-rust"
 
 [dependencies.k8s-openapi]
 git = "https://github.com/Arnavion/k8s-openapi-codegen"
@@ -46,7 +49,7 @@ rev = "b5b46233b7752f0a99a106c9c7d07f7387c41787"
 features = ["v1_14"]
 
 [dependencies.futures01]
-version = "0.1.26"
+version = "0.1.27"
 package = "futures"
 
 [dependencies.tokio]
