@@ -1,14 +1,8 @@
-//use failure::{Error, ResultExt};
-use futures::{
-    compat::{Future01CompatExt, Stream01CompatExt},
-    stream::StreamExt,
-};
 use graphql_client::{GraphQLQuery, Response};
-use log::{error, info, warn};
-use reqwest::r#async::Client;
+use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
 use std::{collections::BTreeMap, fmt};
-use tokio::await as async_wait;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(GraphQLQuery)]
@@ -51,28 +45,50 @@ struct GetBuilds;
 )]
 struct GetRunningBuilds;
 
-#[derive(Fail, Debug)]
+#[derive(Debug)]
 pub enum BkErr {
-    #[fail(display = "Invalid header value specified {}", _0)]
-    InvalidHttpHeader(#[fail(cause)] http::header::InvalidHeaderValue),
-    #[fail(display = "HTTP error: {}", _0)]
+    InvalidHttpHeader(http::header::InvalidHeaderValue),
     Http(reqwest::Error),
-    #[fail(display = "Reqwest failure {}", _0)]
-    Reqwest(#[fail(cause)] reqwest::Error),
-    #[fail(display = "Failed to deserialize json value {}", _0)]
-    Json(#[fail(cause)] serde_json::error::Error),
-    #[fail(display = "Failed to find organization {}", _0)]
+    Reqwest(reqwest::Error),
+    Json(serde_json::error::Error),
     UnknownOrg(String),
-    #[fail(display = "Invalid organization id {}", _0)]
     InvalidOrgId(String),
-    #[fail(display = "Failed to find pipeline {}", _0)]
     UnknownPipeline(String),
-    #[fail(display = "Failed to create threadpool {}", _0)]
-    Threadpool(#[fail(cause)] std::io::Error),
-    #[fail(display = "Request error(s) {}", _0)]
-    Request(#[fail(cause)] GraphQLErrors),
-    #[fail(display = "Invalid response: {}", _0)]
+    Threadpool(std::io::Error),
+    Request(GraphQLErrors),
     InvalidResponse(String),
+}
+
+impl std::error::Error for BkErr {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::InvalidHttpHeader(ihv) => Some(ihv),
+            Self::Http(h) => Some(h),
+            Self::Reqwest(r) => Some(r),
+            Self::Json(j) => Some(j),
+            Self::Threadpool(tp) => Some(tp),
+            _ => None,
+        }
+    }
+}
+
+impl fmt::Display for BkErr {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        use BkErr::*;
+
+        match self {
+            InvalidHttpHeader(ihv) => write!(f, "invalid header value: {}", ihv),
+            Http(re) => write!(f, "http error: {}", re),
+            Reqwest(re) => write!(f, "http request error: {}", re),
+            Json(je) => write!(f, "json error: {}", je),
+            UnknownOrg(o) => write!(f, "unknown org '{}'", o),
+            InvalidOrgId(o) => write!(f, "invalid org id '{}'", o),
+            UnknownPipeline(p) => write!(f, "unknown pipeline '{}'", p),
+            Threadpool(io) => write!(f, "threadpool error: {}", io),
+            Request(api) => write!(f, "API failure: {}", api),
+            InvalidResponse(res) => write!(f, "invalid response {}", res),
+        }
+    }
 }
 
 impl From<reqwest::Error> for BkErr {
@@ -81,7 +97,7 @@ impl From<reqwest::Error> for BkErr {
     }
 }
 
-#[derive(Fail, Debug)]
+#[derive(Debug)]
 pub struct GraphQLErrors {
     errors: Vec<graphql_client::Error>,
 }
@@ -92,31 +108,34 @@ impl fmt::Display for GraphQLErrors {
     }
 }
 
-async fn send_request<'a, Req: Serialize, Res: DeserializeOwned + std::marker::Unpin + std::fmt::Debug>(
+async fn send_request<
+    'a,
+    Req: Serialize,
+    Res: DeserializeOwned + std::marker::Unpin + std::fmt::Debug,
+>(
     client: &'a Client,
     req: &'a Req,
     hash: Option<u64>,
 ) -> Result<(Option<Res>, Option<u64>), BkErr> {
     use std::hash::Hasher;
-    use tokio::prelude::StreamAsyncExt;
 
-    let res = async_wait!(client.post(crate::BK_API_URL)
-        .json(req).send())?;
+    let res = client.post(crate::BK_API_URL).json(req).send().await?;
 
     let res = res.error_for_status().map_err(BkErr::Http)?;
 
     let content_type = res.headers().get(http::header::CONTENT_TYPE);
-    if content_type != Some(&http::header::HeaderValue::from_static("application/json; charset=utf-8")) {
-        return Err(BkErr::InvalidResponse(format!("invalid content-type: {:?}", content_type)));
+    if content_type
+        != Some(&http::header::HeaderValue::from_static(
+            "application/json; charset=utf-8",
+        ))
+    {
+        return Err(BkErr::InvalidResponse(format!(
+            "invalid content-type: {:?}",
+            content_type
+        )));
     }
 
-    let mut json_body = Vec::with_capacity(res.content_length().unwrap_or(1024) as usize);
-    let mut res_body = res.into_body();
-
-    while let Some(chunk) = async_wait!(res_body.next()) {
-        let chunk = chunk.map_err(|e| BkErr::from(e))?;
-        json_body.extend_from_slice(&chunk[..])
-    }
+    let json_body = res.bytes().await?;
 
     let new_hash = {
         let mut hasher = twox_hash::XxHash::default();
@@ -129,7 +148,10 @@ async fn send_request<'a, Req: Serialize, Res: DeserializeOwned + std::marker::U
     }
 
     let res: Response<Res> = serde_json::from_slice(&json_body).map_err(|e| {
-        error!("json error for response: {:?}", String::from_utf8(json_body));
+        error!(
+            "json error for response: {:?}",
+            String::from_utf8(json_body.to_vec())
+        );
         BkErr::Json(e)
     })?;
 
@@ -287,22 +309,26 @@ pub struct Job {
     pub agent: Option<String>,
 }
 
+fn iter_query_rules(query_rules: &str) -> impl Iterator<Item = (&str, Option<&str>)> {
+    query_rules.split(',').filter_map(|rule| {
+        let mut i = rule.splitn(2, '=');
+
+        match (i.next(), i.next()) {
+            (Some(k), Some(v)) => {
+                if v.is_empty() || v == "*" {
+                    Some((k, None))
+                } else {
+                    Some((k, Some(v)))
+                }
+            }
+            _ => None,
+        }
+    })
+}
+
 impl Job {
     pub fn iter_query_rules(&self) -> impl Iterator<Item = (&str, Option<&str>)> {
-        self.query_rules.split(',').filter_map(|rule| {
-            let mut i = rule.splitn(2, '=');
-
-            match (i.next(), i.next()) {
-                (Some(k), Some(v)) => {
-                    if v.is_empty() || v == "*" {
-                        Some((k, None))
-                    } else {
-                        Some((k, Some(v)))
-                    }
-                }
-                _ => None,
-            }
-        })
+        iter_query_rules(&self.query_rules)
     }
 }
 
@@ -397,14 +423,15 @@ impl Monitor {
                 .map_err(BkErr::InvalidHttpHeader)?,
         );
 
-        let client = reqwest::r#async::ClientBuilder::new()
+        let client = reqwest::ClientBuilder::new()
             .default_headers(headers)
             .build()?;
 
         // Verify the id is correct and we have access to it
         let req_body = OrgAccess::build_query(org_access::Variables { id: id.clone() });
 
-        let (res_body, _) = async_wait!(send_request::<_, org_access::ResponseData>(&client, &req_body, None))?;
+        let (res_body, _) =
+            send_request::<_, org_access::ResponseData>(&client, &req_body, None).await?;
 
         // Just verify the ids match as a sanity check, the operation
         // completing without an error is enough to know we can
@@ -442,13 +469,14 @@ impl Monitor {
         });
 
         let client = Client::new();
-        let mut res = async_wait!(client
+        let res = client
             .post(crate::BK_API_URL)
             .bearer_auth(&token)
             .json(&req_body)
-            .send())?;
+            .send()
+            .await?;
 
-        let res_body: Response<org_id::ResponseData> = async_wait!(res.json())?;
+        let res_body: Response<org_id::ResponseData> = res.json().await?;
 
         let id = res_body
             .data
@@ -457,7 +485,7 @@ impl Monitor {
 
         info!("resolved slug '{}' to id '{}'", slug, id.id);
 
-        async_wait!(Self::with_org_id(token, id.id))
+        Self::with_org_id(token, id.id).await
     }
 
     pub fn client(&self) -> Client {
@@ -468,16 +496,13 @@ impl Monitor {
         &'a self,
         pipeline: &'a str,
     ) -> Result<futures::channel::mpsc::Receiver<Builds>, BkErr> {
-        use futures::future::{FutureExt, TryFutureExt};
-        use tokio::prelude::StreamAsyncExt;
-
         let req_body = FindPipeline::build_query(find_pipeline::Variables {
             org: self.org_id.clone(),
             name: pipeline.to_owned(),
         });
 
         let (res_body, _) =
-            async_wait!(send_request::<_, find_pipeline::ResponseData>(&self.client, &req_body, None))?;
+            send_request::<_, find_pipeline::ResponseData>(&self.client, &req_body, None).await?;
 
         let pipeline = res_body
             .and_then(|root| {
@@ -537,46 +562,49 @@ impl Monitor {
             // then posts a cloud pubsub message that we listen to instead as it should
             // be much lower cost for everyone involved, at the expense of additional
             // complexity
-            let mut interval =
-                tokio_timer::Interval::new_interval(std::time::Duration::from_secs(1));
+            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
 
             let mut failure_count = 0u8;
             let mut query_hash = None;
             let mut known_builds = Vec::new();
             const MAX_FAILURES: u8 = 100;
 
-            while let Some(_) = async_wait!(interval.next()) {
-                let builds = match async_wait!(get_builds(&client, &pipeline_id, &mut known_builds, &mut query_hash)) {
-                    Ok(builds) => {
-                        if failure_count > 0 {
-                            info!("successfully sent query after {} failures", failure_count);
-                            failure_count = 0;
-                        }
+            loop {
+                interval.tick().await;
+                let builds =
+                    match get_builds(&client, &pipeline_id, &mut known_builds, &mut query_hash)
+                        .await
+                    {
+                        Ok(builds) => {
+                            if failure_count > 0 {
+                                info!("successfully sent query after {} failures", failure_count);
+                                failure_count = 0;
+                            }
 
-                        match builds {
-                            Some(builds) => Builds {
-                                builds,
-                                pipeline: pipeline_name.clone(),
-                                org: org_slug.clone(),
-                            },
-                            None => continue,
+                            match builds {
+                                Some(builds) => Builds {
+                                    builds,
+                                    pipeline: pipeline_name.clone(),
+                                    org: org_slug.clone(),
+                                },
+                                None => continue,
+                            }
                         }
-                    }
-                    Err(err) => {
-                        failure_count += 1;
+                        Err(err) => {
+                            failure_count += 1;
 
-                        if failure_count >= MAX_FAILURES {
-                            error!(
-                                "stopping query for {}, too many failures: {}",
-                                pipeline_name, err
-                            );
-                            break;
-                        } else {
-                            warn!("failed to send query {}: {}", failure_count, err);
-                            continue;
+                            if failure_count >= MAX_FAILURES {
+                                error!(
+                                    "stopping query for {}, too many failures: {}",
+                                    pipeline_name, err
+                                );
+                                break;
+                            } else {
+                                warn!("failed to send query {}: {}", failure_count, err);
+                                continue;
+                            }
                         }
-                    }
-                };
+                    };
 
                 // Try to send to our channel, if it fails it means the receiver
                 // was dropped and we can stop polling
@@ -590,8 +618,6 @@ impl Monitor {
                 pipeline_name, pipeline_id,
             );
         };
-
-        let poll = poll.unit_error().boxed().compat();
 
         tokio::spawn(poll);
 
@@ -609,15 +635,14 @@ async fn get_builds<'a>(
         id: pipeline_id.clone(),
     });
 
-    let (res_body, _hash) = async_wait!(send_request::<_, get_running_builds::ResponseData>(&client, &req_body, None))?;
+    let (res_body, _hash) =
+        send_request::<_, get_running_builds::ResponseData>(&client, &req_body, None).await?;
 
     let builds_to_check = res_body
         .and_then(|root| root.node)
-        .and_then(|node| {
-            match node.on {
-                get_running_builds::GetRunningBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
-                _ => None,
-            }
+        .and_then(|node| match node.on {
+            get_running_builds::GetRunningBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
+            _ => None,
         })
         .and_then(|in_builds| in_builds.edges)
         .and_then(|builds| {
@@ -629,20 +654,30 @@ async fn get_builds<'a>(
                         uuid: parse_uuid!(&build.uuid),
                         commit: build.commit,
                     })
-                }).collect();
+                })
+                .collect();
 
             Some(builds)
         });
 
-    let commits: Vec<_> = known_builds.iter().map(|kb| kb.commit.clone())
-        .chain(builds_to_check.unwrap_or_else(|| Vec::new()).into_iter().map(|kb| kb.commit)).collect();
+    let commits: Vec<_> = known_builds
+        .iter()
+        .map(|kb| kb.commit.clone())
+        .chain(
+            builds_to_check
+                .unwrap_or_else(|| Vec::new())
+                .into_iter()
+                .map(|kb| kb.commit),
+        )
+        .collect();
 
     let req_body = GetBuilds::build_query(get_builds::Variables {
         id: pipeline_id.clone(),
-        commits: Some(commits)
+        commits: Some(commits),
     });
 
-    let (res_body, hash) = async_wait!(send_request::<_, get_builds::ResponseData>(&client, &req_body, *query_hash))?;
+    let (res_body, hash) =
+        send_request::<_, get_builds::ResponseData>(&client, &req_body, *query_hash).await?;
 
     // Don't bother sending an update to jobifier if the Buildkite state hasn't changed
     if *query_hash == hash {
@@ -723,7 +758,7 @@ async fn get_builds<'a>(
                         metadata,
                         message: build.message,
                         commit: build.commit,
-                        uuid: uuid,
+                        uuid,
                         state: build.state.into(),
                     })
                 })
@@ -741,14 +776,12 @@ async fn get_builds<'a>(
     known_builds.clear();
 
     if let Some(ref builds) = builds {
-        known_builds.extend(builds.iter().filter_map(|b| {
-            match b.state {
-                BuildStates::Running => Some(KnownBuild {
-                    uuid: b.uuid.clone(),
-                    commit: b.commit.clone(),
-                }),
-                _ => None,
-            }
+        known_builds.extend(builds.iter().filter_map(|b| match b.state {
+            BuildStates::Running => Some(KnownBuild {
+                uuid: b.uuid.clone(),
+                commit: b.commit.clone(),
+            }),
+            _ => None,
         }))
     }
 
@@ -757,35 +790,19 @@ async fn get_builds<'a>(
 
 #[cfg(test)]
 mod test {
-    use super::{Job, JobStates};
-
     #[test]
     fn iters_agent_rules() {
-        let job = Job {
-            id: "".to_owned(),
-            exit_status: None,
-            state: JobStates::Running,
-            query_rules: "queue=something,os=linux,blah=thing".to_owned(),
-        };
+        let mut iter = super::iter_query_rules("queue=something,os=linux,blah=thing");
 
-        let mut iter = job.iter_query_rules();
-
-        assert_eq!(iter.next(), Some(("queue", "something")));
-        assert_eq!(iter.next(), Some(("os", "linux")));
-        assert_eq!(iter.next(), Some(("blah", "thing")));
+        assert_eq!(iter.next(), Some(("queue", Some("something"))));
+        assert_eq!(iter.next(), Some(("os", Some("linux"))));
+        assert_eq!(iter.next(), Some(("blah", Some("thing"))));
         assert_eq!(iter.next(), None);
     }
 
     #[test]
     fn iters_empty_agent_rules() {
-        let job = Job {
-            id: "".to_owned(),
-            exit_status: None,
-            state: JobStates::Running,
-            query_rules: String::new(),
-        };
-
-        let mut iter = job.iter_query_rules();
+        let mut iter = super::iter_query_rules("");
         assert_eq!(iter.next(), None);
     }
 }

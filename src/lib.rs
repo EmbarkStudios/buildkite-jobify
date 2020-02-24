@@ -1,11 +1,5 @@
-#![feature(await_macro, async_await)]
-
-#[macro_use]
-extern crate failure;
-#[macro_use(Deserialize, Serialize)]
-extern crate serde;
-
 pub mod jobifier;
+pub mod k8s;
 pub mod monitor;
 pub mod scheduler;
 
