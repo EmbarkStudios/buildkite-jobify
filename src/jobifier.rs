@@ -170,7 +170,7 @@ async fn get_jobify_config<'a>(
 
 struct JobInfo<'a> {
     /// The buildkite job description
-    //bk_job: &'a monitor::Job,
+    bk_job: &'a monitor::Job,
     /// The slug for the pipeline the job is part of
     pipeline: &'a str,
     /// The slug for the organization the pipeline is a part of
@@ -185,11 +185,7 @@ async fn spawn_job<'a>(
     spec: &'a batch::Job,
     namespace: &'a str,
 ) -> Result<(String, Option<batch::JobStatus>), Error> {
-    // Make a unique name for the job/agent, as using eg the job id
-    // is confusing as there is no guarantee which agent will pick
-    // up which job if they have matching agent tags
-    let uuid = Uuid::new_v4();
-    let agent_name = format!("{}-{}", nfo.agent.name, uuid);
+    let agent_name = format!("{}-{}", nfo.agent.name, nfo.bk_job.uuid);
 
     let labels = {
         let mut labels = BTreeMap::new();
@@ -277,6 +273,20 @@ async fn spawn_job<'a>(
                             };
 
                         agent_name_var.value = Some(agent_name.clone());
+                    }
+
+                    // This should never be the case, but...just in case
+                    if container.args.is_none() {
+                        container.args = Some(vec![
+                            "start".to_owned(),
+                            "--disconnect-after-job".to_owned(),
+                        ]);
+                    }
+
+                    // Modify the arguments to include the bk job id that we want to run in this k8s job
+                    if let Some(args) = container.args.as_mut() {
+                        args.push("--acquire-job".to_owned());
+                        args.push(format!("{}", nfo.bk_job.uuid));
                     }
                 }
             }
@@ -525,39 +535,37 @@ async fn jobify(
                     }
 
                     match configs.get(chksum).and_then(|cfg| cfg.as_ref()) {
-                        Some(cfg) => {
-                            match get_best_agent(cfg, &job) {
-                                Ok((agent, spec)) => {
-                                    let job_info = JobInfo {
-                                        //bk_job: &job,
-                                        pipeline: &builds.pipeline,
-                                        org: &builds.org,
-                                        agent,
-                                    };
+                        Some(cfg) => match get_best_agent(cfg, &job) {
+                            Ok((agent, spec)) => {
+                                let job_info = JobInfo {
+                                    bk_job: &job,
+                                    pipeline: &builds.pipeline,
+                                    org: &builds.org,
+                                    agent,
+                                };
 
-                                    match spawn_job(&kbctl, &job_info, &spec, &namespace).await {
-                                        Ok((name, _k8_job_status)) => {
-                                            info!(
-                                                "spawned job {} for {}({})",
-                                                name, job.label, job.uuid,
-                                            );
+                                match spawn_job(&kbctl, &job_info, &spec, &namespace).await {
+                                    Ok((name, _k8_job_status)) => {
+                                        info!(
+                                            "spawned job {} for {}({})",
+                                            name, job.label, job.uuid,
+                                        );
 
-                                            known_jobs.insert(job.uuid.clone(), None);
-                                            pending_agents.insert(name);
-                                        }
-                                        Err(e) => {
-                                            warn!(
-                                                "failed to spawn job for {}({}): {}",
-                                                job.uuid, job.label, e
-                                            );
-                                        }
+                                        known_jobs.insert(job.uuid.clone(), None);
+                                        pending_agents.insert(name);
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "failed to spawn job for {}({}): {}",
+                                            job.uuid, job.label, e
+                                        );
                                     }
                                 }
-                                Err(e) => {
-                                    warn!("{}", e);
-                                }
                             }
-                        }
+                            Err(e) => {
+                                warn!("{}", e);
+                            }
+                        },
                         None => {
                             // TODO: Add this into a queue to retry after we retry getting the configuration
                             warn!(
@@ -605,7 +613,6 @@ async fn jobify(
         // a cleanup of any kubernetes jobs that we have created that have exited, as
         // kubernetes will leave them around and clutter things, even though it's not
         // an issue since we always name them with UUID's
-        // TODO: Check the build's config and queue a retry if job failed, based on its exit code
         for (uuid, _status) in &exited {
             if let Some(_known) = known_jobs.remove(uuid).and_then(|kj| kj) {
                 k8s_needs_cleanup += 1;
