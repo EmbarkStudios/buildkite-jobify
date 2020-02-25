@@ -1,14 +1,13 @@
 [package]
 name = "buildkite-jobify"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Jake Shadle <jake.shadle@embark-studios.com>"]
 edition = "2018"
-description = "" # TODO:
+description = "A service that picks up work and configuration from Buildkite, and creates Kubernetes jobs to fulfill those requests"
 license = "MIT/Apache-2.0"
 repository = "https://github.com/EmbarkStudios/buildkite-jobify"
 readme = "README.md"
-keywords = [] # TODO: fill in before publishing
-categories = [] # TODO: fill in before publishing
+keywords = ["buildkite", "k8s", "kubernetes", "ci"]
 publish = false # not yet
 
 [dependencies]
@@ -22,7 +21,7 @@ futures = "0.3.4"
 graphql_client = "0.8.0"
 http = "0.2.0"
 lru_time_cache = "0.9.0"
-openssl = "0.10.28"
+openssl = { version = "0.10.28", features = ["vendored"] }
 reqwest = { version = "0.10.2", default-features = false, features = ["json", "native-tls"] }
 serde = { version = "1.0.104", features = ["derive"] }
 serde_json = "1.0.48"
