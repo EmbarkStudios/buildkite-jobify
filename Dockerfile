@@ -1,21 +1,23 @@
-FROM ekidd/rust-musl-builder:nightly-2019-04-25-openssl11 AS builder
+FROM rust:1.41.0 as build
+
+RUN apt-get update && apt-get install musl-tools -y
+RUN rustup target add x86_64-unknown-linux-musl
+
+WORKDIR /usr/src
 
 # Add our source code.
-ADD ./Cargo.toml ./
+ADD ./Cargo.toml ./Cargo.lock ./
 ADD ./src/ ./src/
 ADD ./buildkite/ ./buildkite/
 
-# Fix permissions on source code.
-RUN sudo chown -R rust:rust /home/rust
-
 # Build our application.
-RUN cargo build --release
+RUN cargo install --target x86_64-unknown-linux-musl --path .
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates
 
-COPY --from=builder \
-    /home/rust/src/target/x86_64-unknown-linux-musl/release/buildkite-jobify \
+COPY --from=build \
+    /usr/local/cargo/bin/buildkite-jobify \
     /jobify/buildkite-jobify
 
 CMD /jobify/buildkite-jobify

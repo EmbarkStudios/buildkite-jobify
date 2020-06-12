@@ -1,27 +1,18 @@
+use crate::k8s::{config, APIClient};
 use crate::monitor;
-use failure::{Error, ResultExt};
-use futures::{
-    channel::mpsc,
-    compat::{Future01CompatExt, Stream01CompatExt},
-    future::{FutureExt, TryFutureExt},
-    stream::StreamExt,
-};
+use anyhow::{Context, Error};
+use futures::{channel::mpsc, stream::StreamExt};
 use graphql_client::{GraphQLQuery, Response};
 use k8s_openapi::{
-    ListOptional,
-    api::{
-        batch::v1 as batch,
-        core::v1 as core,
-    },
+    api::{batch::v1 as batch, core::v1 as core},
+    List, ListOptional,
 };
-use kubernetes::{client::APIClient, config};
-use log::{error, info, warn};
-use reqwest::r#async::Client;
+use reqwest::Client;
 use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
 };
-use tokio::await as async_wait;
+use tracing::{error, info, warn};
 use uuid::Uuid;
 
 #[derive(GraphQLQuery)]
@@ -48,10 +39,8 @@ impl Jobifier {
         let (tx, rx) = mpsc::unbounded();
 
         let spawner = async move {
-            async_wait!(jobify(kbctl, buildkite_token, namespace, rx));
+            jobify(kbctl, buildkite_token, namespace, rx).await;
         };
-
-        let spawner = spawner.unit_error().boxed().compat();
 
         tokio::spawn(spawner);
 
@@ -71,7 +60,6 @@ async fn get_jobify_config<'a>(
     artifact_id: &'a str, // The UUID of the artifact
 ) -> Result<Config, Error> {
     use std::io::Read;
-    use tokio::prelude::StreamAsyncExt;
 
     info!("acquiring jobify artifact information {}", artifact_id);
 
@@ -80,47 +68,40 @@ async fn get_jobify_config<'a>(
     });
 
     // Attempt to retrieve the artifact details from Buildkite
-    let mut res = async_wait!(client
+    let res = client
         .post(crate::BK_API_URL)
         .bearer_auth(bk_token)
         .json(&req_body)
-        .send().compat())?;
+        .send()
+        .await?;
 
-    let res_body: Response<get_artifact::ResponseData> = async_wait!(res.json().compat())?;
+    let res_body: Response<get_artifact::ResponseData> = res.json().await?;
 
     let artifact = res_body
         .data
         .and_then(|rd| rd.artifact)
-        .ok_or_else(|| format_err!("Failed to find artifact {}", artifact_id))?;
+        .context("failed to find artifact id")?;
 
     // Just sanity check that the artifact's stated checksum is the same as
     // was specified in the build's metadata
     if artifact.sha1sum != chksum {
-        return Err(format_err!("Checksum mismatch"));
+        anyhow::bail!("checksum mismatch");
     }
 
     info!("acquiring jobify artifact {}", artifact_id);
 
-    let res = async_wait!(client.get(&artifact.download_url).send().compat())?;
+    let res = client.get(&artifact.download_url).send().await?;
 
     info!("deserializing jobify configuration");
+    let res_body = res.bytes().await?;
 
     // Just assume gzipped tar for now
-    let decompressed = {
-        let mut body = Vec::with_capacity(res.content_length().unwrap_or(1024) as usize);
-        let mut res_body = res.into_body().compat();
-
-        while let Some(chunk) = async_wait!(res_body.next()) {
-            let chunk = chunk?;
-            body.extend_from_slice(&chunk[..])
-        }
-
-        smush::decode(&body, smush::Encoding::Gzip)?
-    };
-
     let files = {
-        let cursor = std::io::Cursor::new(decompressed);
-        let mut archive = tar::Archive::new(cursor);
+        use bytes::buf::BufExt;
+        let reader = res_body.reader();
+
+        let decoder = flate2::read::GzDecoder::new(reader);
+        let mut archive = tar::Archive::new(decoder);
 
         let mut files = BTreeMap::new();
 
@@ -150,7 +131,7 @@ async fn get_jobify_config<'a>(
     // We require an agents.toml file at minimum to map agent tags to job specs
     let agents = files
         .get(Path::new("agents.toml"))
-        .ok_or_else(|| format_err!("'agents.toml' was not in artifact {}", artifact_id))?;
+        .context("'agents.toml' was not in artifact")?;
 
     let agents: JobifyAgents = toml::from_str(&agents)?;
 
@@ -164,7 +145,7 @@ async fn get_jobify_config<'a>(
         match files.get(path) {
             Some(cfg) => {
                 let spec: batch::Job = serde_yaml::from_str(cfg).map_err(|e| {
-                    format_err!(
+                    anyhow::anyhow!(
                         "failed to deserialize job spec for in {}: {}",
                         path.display(),
                         e
@@ -189,7 +170,7 @@ async fn get_jobify_config<'a>(
 
 struct JobInfo<'a> {
     /// The buildkite job description
-    //bk_job: &'a monitor::Job,
+    bk_job: &'a monitor::Job,
     /// The slug for the pipeline the job is part of
     pipeline: &'a str,
     /// The slug for the organization the pipeline is a part of
@@ -204,11 +185,7 @@ async fn spawn_job<'a>(
     spec: &'a batch::Job,
     namespace: &'a str,
 ) -> Result<(String, Option<batch::JobStatus>), Error> {
-    // Make a unique name for the job/agent, as using eg the job id
-    // is confusing as there is no guarantee which agent will pick
-    // up which job if they have matching agent tags
-    let uuid = Uuid::new_v4();
-    let agent_name = format!("{}-{}", nfo.agent.name, uuid);
+    let agent_name = format!("{}-{}", nfo.agent.name, nfo.bk_job.uuid);
 
     let labels = {
         let mut labels = BTreeMap::new();
@@ -297,6 +274,20 @@ async fn spawn_job<'a>(
 
                         agent_name_var.value = Some(agent_name.clone());
                     }
+
+                    // This should never be the case, but...just in case
+                    if container.args.is_none() {
+                        container.args = Some(vec![
+                            "start".to_owned(),
+                            "--disconnect-after-job".to_owned(),
+                        ]);
+                    }
+
+                    // Modify the arguments to include the bk job id that we want to run in this k8s job
+                    if let Some(args) = container.args.as_mut() {
+                        args.push("--acquire-job".to_owned());
+                        args.push(format!("{}", nfo.bk_job.uuid));
+                    }
                 }
             }
         }
@@ -329,11 +320,13 @@ async fn spawn_job<'a>(
 
     // Construct the job creation request
     let (req, _) = batch::Job::create_namespaced_job(namespace, &k8_job, Default::default())
-        .map_err(|e| format_err!("failed to create request: {}", e))?;
+        .context("create_namespaced_job")?;
 
     // Make the request TODO: handle errors...
-    let job = async_wait!(kbctl.request::<batch::Job>(req))
-        .map_err(|e| format_err!("request failed: {}", e))?;
+    let job = kbctl
+        .request::<batch::Job>(req)
+        .await
+        .context("create_namespaced_job")?;
 
     Ok((agent_name, job.status))
 }
@@ -384,7 +377,7 @@ fn get_best_agent<'a>(
     }
 
     let agent = best.ok_or_else(|| {
-        format_err!(
+        anyhow::anyhow!(
             "no suitable agent could be found for job {}({})",
             job.uuid,
             job.label
@@ -392,7 +385,7 @@ fn get_best_agent<'a>(
     })?;
 
     let spec_path = agent.kubernetes.as_ref().ok_or_else(|| {
-        format_err!(
+        anyhow::anyhow!(
             "agent {} can't run {}({}), no k8s spec specified",
             agent.name,
             job.uuid,
@@ -400,7 +393,7 @@ fn get_best_agent<'a>(
         )
     })?;
     let spec = cfg.k8s_specs.get(spec_path).ok_or_else(|| {
-        format_err!(
+        anyhow::anyhow!(
             "agent {} points to missing spec {}, can't assign job {}({})",
             agent.name,
             spec_path.display(),
@@ -412,26 +405,26 @@ fn get_best_agent<'a>(
     Ok((agent, spec))
 }
 
-async fn cleanup_jobs(
-    kbctl: APIClient,
-    namespace: String,
-    pipeline: String,
-) -> Result<u32, Error> {
+async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> Result<u32, Error> {
     // We just aggressively delete all pods that match our labels, instead
     // of more carefully only deleting pods for jobs that are known to be completed
 
     let label_selector = format!("bk-jobify=true,bk-pipeline={}", pipeline);
 
     // TODO: Use watches
-    let (req, _) =
-        core::Pod::list_namespaced_pod(&namespace, ListOptional {
+    let (req, _) = core::Pod::list_namespaced_pod(
+        &namespace,
+        ListOptional {
             label_selector: Some(&label_selector),
             ..Default::default()
-        }).map_err(|e| format_err!("list_namespaced_pod request creation failed: {}", e))?;
+        },
+    )
+    .context("list_namespaced_pod")?;
 
-    let pods = async_wait!(kbctl.request::<core::PodList>(req)).map_err(|e| {
-        format_err!("list_namespaced_pod request failed: {}", e)
-    })?;
+    let pods = kbctl
+        .request::<List<core::Pod>>(req)
+        .await
+        .context("list_namespaced_pod")?;
 
     let mut deleted = 0;
 
@@ -439,17 +432,19 @@ async fn cleanup_jobs(
         if let Some(statuses) = pod.status.and_then(|s| s.container_statuses) {
             for status in statuses {
                 if status.state.and_then(|s| s.terminated).is_some() {
-                    if let Some(agent_name) = pod.metadata
-                        .as_ref().and_then(|md| md.labels.as_ref())
+                    if let Some(agent_name) = pod
+                        .metadata
+                        .as_ref()
+                        .and_then(|md| md.labels.as_ref())
                         .and_then(|labels| labels.get("job-name"))
                     {
                         let (req, _) = match batch::Job::delete_namespaced_job(
                             &agent_name,
                             &namespace,
-                            batch::DeleteNamespacedJobOptional {
+                            k8s_openapi::DeleteOptional {
                                 propagation_policy: Some("Foreground"),
                                 ..Default::default()
-                            }
+                            },
                         ) {
                             Ok(r) => r,
                             Err(e) => {
@@ -458,7 +453,7 @@ async fn cleanup_jobs(
                             }
                         };
 
-                        match async_wait!(kbctl.request::<batch::Job>(req)) {
+                        match kbctl.request::<batch::Job>(req).await {
                             Ok(_) => {
                                 info!("deleted agent {}", agent_name);
                                 deleted += 1;
@@ -488,7 +483,7 @@ async fn jobify(
         lru_time_cache::LruCache::with_capacity(10);
     let client = Client::new();
 
-    while let Some(builds) = async_wait!(rx.next()) {
+    while let Some(builds) = rx.next().await {
         // For each build, ensure that we get the agent configuration to use
         // for it via a tarball generated from the same commit as the build
         for build in &builds.builds {
@@ -502,26 +497,24 @@ async fn jobify(
                 {
                     if !configs.contains_key(chksum) {
                         if let Some(artifact_id) = build.metadata.get("jobify-artifact-id") {
-                            let val = match async_wait!(get_jobify_config(
-                                &client,
-                                &bk_token,
-                                chksum,
-                                artifact_id
-                            )) {
-                                Ok(cfg) => Some(cfg),
-                                Err(err) => {
-                                    // If we fail to find the artifact-id we just assume
-                                    // that something went wrong and mark the config
-                                    // as invalid and stop checking
+                            let val =
+                                match get_jobify_config(&client, &bk_token, chksum, artifact_id)
+                                    .await
+                                {
+                                    Ok(cfg) => Some(cfg),
+                                    Err(err) => {
+                                        // If we fail to find the artifact-id we just assume
+                                        // that something went wrong and mark the config
+                                        // as invalid and stop checking
 
-                                    // TODO: Add this into a queue to retry later
-                                    error!(
-                                        "failed to get jobify configuration for build {}: {}",
-                                        build.uuid, err
-                                    );
-                                    None
-                                }
-                            };
+                                        // TODO: Add this into a queue to retry later
+                                        error!(
+                                            "failed to get jobify configuration for build {}: {}",
+                                            build.uuid, err
+                                        );
+                                        None
+                                    }
+                                };
 
                             configs.insert(chksum.to_owned(), val);
                         }
@@ -542,38 +535,37 @@ async fn jobify(
                     }
 
                     match configs.get(chksum).and_then(|cfg| cfg.as_ref()) {
-                        Some(cfg) => {
-                            match get_best_agent(cfg, &job) {
-                                Ok((agent, spec)) => {
-                                    let job_info = JobInfo {
-                                        //bk_job: &job,
-                                        pipeline: &builds.pipeline,
-                                        org: &builds.org,
-                                        agent,
-                                    };
+                        Some(cfg) => match get_best_agent(cfg, &job) {
+                            Ok((agent, spec)) => {
+                                let job_info = JobInfo {
+                                    bk_job: &job,
+                                    pipeline: &builds.pipeline,
+                                    org: &builds.org,
+                                    agent,
+                                };
 
-                                    match async_wait!(spawn_job(&kbctl, &job_info, &spec, &namespace)) {
-                                        Ok((name, _k8_job_status)) => {
-                                            info!(
-                                                "spawned job {} for {}({})",
-                                                name,
-                                                job.label,
-                                                job.uuid,
-                                            );
+                                match spawn_job(&kbctl, &job_info, &spec, &namespace).await {
+                                    Ok((name, _k8_job_status)) => {
+                                        info!(
+                                            "spawned job {} for {}({})",
+                                            name, job.label, job.uuid,
+                                        );
 
-                                            known_jobs.insert(job.uuid.clone(), None);
-                                            pending_agents.insert(name);
-                                        }
-                                        Err(e) => {
-                                            warn!("failed to spawn job for {}({}): {}", job.uuid, job.label, e);
-                                        }
+                                        known_jobs.insert(job.uuid.clone(), None);
+                                        pending_agents.insert(name);
+                                    }
+                                    Err(e) => {
+                                        warn!(
+                                            "failed to spawn job for {}({}): {}",
+                                            job.uuid, job.label, e
+                                        );
                                     }
                                 }
-                                Err(e) => {
-                                    warn!("{}", e);
-                                }
                             }
-                        }
+                            Err(e) => {
+                                warn!("{}", e);
+                            }
+                        },
                         None => {
                             // TODO: Add this into a queue to retry after we retry getting the configuration
                             warn!(
@@ -588,7 +580,11 @@ async fn jobify(
 
         // Pair jobs with agents that we spun up
         for build in &builds.builds {
-            for (job_id, agent) in build.jobs.iter().filter_map(|j| j.agent.as_ref().and_then(|an| Some((j.uuid, an)))) {
+            for (job_id, agent) in build
+                .jobs
+                .iter()
+                .filter_map(|j| j.agent.as_ref().and_then(|an| Some((j.uuid, an))))
+            {
                 let agent = agent.clone();
                 if pending_agents.remove(&agent) {
                     match known_jobs.get_mut(&job_id) {
@@ -602,16 +598,21 @@ async fn jobify(
             }
         }
 
-        let exited: Vec<_> = builds.builds.into_iter()
-            .flat_map(|b| b.jobs.into_iter().filter_map(|j| j.exit_status.and_then(|es| Some((j.uuid, es)))))
+        let exited: Vec<_> = builds
+            .builds
+            .into_iter()
+            .flat_map(|b| {
+                b.jobs
+                    .into_iter()
+                    .filter_map(|j| j.exit_status.and_then(|es| Some((j.uuid, es))))
+            })
             .collect();
 
         let mut k8s_needs_cleanup = 0;
         // For all of the jobs that have exited, if any are in our known list, attempt
-        // a cleanup of any kubernetes jobs that we have created that have exited, as 
+        // a cleanup of any kubernetes jobs that we have created that have exited, as
         // kubernetes will leave them around and clutter things, even though it's not
         // an issue since we always name them with UUID's
-        // TODO: Check the build's config and queue a retry if job failed, based on its exit code
         for (uuid, _status) in &exited {
             if let Some(_known) = known_jobs.remove(uuid).and_then(|kj| kj) {
                 k8s_needs_cleanup += 1;
@@ -624,17 +625,17 @@ async fn jobify(
             let pipeline = builds.pipeline;
 
             let cleanup = async move {
-                match async_wait!(cleanup_jobs(client, ns, pipeline)) {
+                match cleanup_jobs(client, ns, pipeline).await {
                     Ok(da) => {
                         info!("cleaned up {} kubernetes agents", da);
-                    },
+                    }
                     Err(e) => {
                         error!("failed during kubernetes job cleanup: {}", e);
                     }
                 }
             };
 
-            tokio::spawn(cleanup.unit_error().boxed().compat());
+            tokio::spawn(cleanup);
         }
     }
 }
@@ -643,6 +644,8 @@ struct Config {
     agents: JobifyAgents,
     k8s_specs: BTreeMap<PathBuf, batch::Job>,
 }
+
+use serde::{Deserialize, Serialize};
 
 #[derive(Debug, Deserialize, Serialize)]
 struct JobifyAgents {

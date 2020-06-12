@@ -1,13 +1,10 @@
-#![feature(await_macro, async_await)]
-
+use anyhow::{anyhow, bail, Context, Error};
 use buildkite_jobify::{jobifier::Jobifier, monitor::Monitor, scheduler::Scheduler};
-use failure::{bail, format_err, Error};
-use log::error;
-use serde_derive::Deserialize;
+use serde::Deserialize;
 use std::path::PathBuf;
 use structopt::StructOpt;
-use structopt_flags::LogLevel;
-use tokio::await as async_wait;
+use tracing::error;
+use tracing_subscriber::filter::LevelFilter;
 
 #[derive(Deserialize)]
 struct Config {
@@ -21,11 +18,14 @@ struct Config {
     pipelines: Vec<String>,
 }
 
+fn parse_level(s: &str) -> Result<LevelFilter, Error> {
+    s.parse::<LevelFilter>()
+        .map_err(|_| anyhow!("failed to parse level '{}'", s))
+}
+
 #[derive(StructOpt)]
 #[structopt(name = "jobify")]
 struct Opts {
-    #[structopt(flatten)]
-    log_level: structopt_flags::LogLevelOpt,
     /// Path to a configuration file
     #[structopt(short = "c", long = "config", parse(from_os_str))]
     config: Option<PathBuf>,
@@ -40,18 +40,48 @@ struct Opts {
     /// The namespace under which kubernetes jobs are created. Defaults to "buildkite".
     #[structopt(short = "n", long = "namespace")]
     namespace: Option<String>,
+    #[structopt(
+        short = "L",
+        long = "log-level",
+        default_value = "info",
+        parse(try_from_str = parse_level),
+        long_help = "The log level for messages, only log messages at or above the level will be emitted.
+
+Possible values:
+* off
+* error
+* warn
+* info (default)
+* debug
+* trace"
+    )]
+    log_level: LevelFilter,
+    /// Output log messages as json
+    #[structopt(long)]
+    json: bool,
     /// The pipeline(s) to watch for builds
     #[structopt(name = "PIPELINE")]
     pipelines: Vec<String>,
 }
 
-#[tokio::main]
-async fn main() {
+async fn real_main() -> Result<(), Error> {
     let args = Opts::from_args();
 
-    env_logger::builder()
-        .filter_level(args.log_level.get_level_filter())
-        .init();
+    let mut env_filter = tracing_subscriber::EnvFilter::from_default_env();
+
+    // If a user specifies a log level, we assume it only pertains to cargo_fetcher,
+    // if they want to trace other crates they can use the RUST_LOG env approach
+    env_filter = env_filter.add_directive(args.log_level.clone().into());
+
+    let subscriber = tracing_subscriber::FmtSubscriber::builder().with_env_filter(env_filter);
+
+    if args.json {
+        tracing::subscriber::set_global_default(subscriber.json().finish())
+            .context("failed to set default subscriber")?;
+    } else {
+        tracing::subscriber::set_global_default(subscriber.finish())
+            .context("failed to set default subscriber")?;
+    };
 
     // The tokio wrapper macro only supports unit returns at the moment,
     // so wrap it up in a function instead
@@ -59,7 +89,7 @@ async fn main() {
         let mut cfg: Config = match args.config {
             Some(ref path) => {
                 let contents = std::fs::read_to_string(&path).map_err(|e| {
-                    format_err!(
+                    anyhow!(
                         "failed to read configuration from {}: {}",
                         path.display(),
                         e
@@ -67,7 +97,7 @@ async fn main() {
                 })?;
 
                 toml::from_str(&contents).map_err(|e| {
-                    format_err!(
+                    anyhow!(
                         "failed to deserialize configuration from {}: {}",
                         path.display(),
                         e
@@ -101,7 +131,8 @@ async fn main() {
 
         let org = cfg
             .organization
-            .ok_or_else(|| format_err!("no organization slug was provided"))?;
+            .context("no organization slug was provided")?;
+
         let api_token = match cfg.api_token {
             Some(tok) => tok,
             None => match std::env::var("BUILDKITE_API_TOKEN") {
@@ -119,7 +150,12 @@ async fn main() {
             bail!("no pipelines were provided");
         }
 
-        Ok((org, api_token, cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()), cfg.pipelines))
+        Ok((
+            org,
+            api_token,
+            cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()),
+            cfg.pipelines,
+        ))
     };
 
     let (org, token, namespace, pipelines) = match get_cfg() {
@@ -130,28 +166,39 @@ async fn main() {
         }
     };
 
-    let start: Result<_, Error> = async_wait!(async {
-        let monitor = async_wait!(Monitor::with_org_slug(token.clone(), &org,))
-            .map_err(|e| format_err!("failed to create buildkite organization monitor: {}", e))?;
-        let jobifier = Jobifier::create(token, namespace)
-            .map_err(|e| format_err!("failed to create k8s jobifier: {}", e))?;
+    let start: Result<_, Error> = async {
+        let monitor = Monitor::with_org_slug(token.clone(), &org)
+            .await
+            .context("buildkite org monitor")?;
+        let jobifier = Jobifier::create(token, namespace).context("k8s jobifier")?;
         let scheduler = Scheduler::new(monitor, jobifier);
 
         for pipeline in pipelines {
-            async_wait!(scheduler.watch(&pipeline))
-                .map_err(|e| format_err!("failed to watch pipeline '{}': {}", pipeline, e))?;
+            scheduler.watch(&pipeline).await.context("pipeline watch")?;
         }
 
         Ok(scheduler)
-    });
+    }
+    .await;
 
     let scheduler = match start {
         Ok(s) => s,
         Err(e) => {
-            error!("{}", e);
+            error!("{:#}", e);
             std::process::exit(1);
         }
     };
 
-    async_wait!(scheduler.wait());
+    Ok(scheduler.wait().await)
+}
+
+#[tokio::main]
+async fn main() {
+    match real_main().await {
+        Ok(_) => {}
+        Err(e) => {
+            tracing::error!("{:#}", e);
+            std::process::exit(1);
+        }
+    }
 }

@@ -1,58 +1,43 @@
 [package]
 name = "buildkite-jobify"
-version = "0.3.1"
+version = "0.4.0"
 authors = ["Jake Shadle <jake.shadle@embark-studios.com>"]
 edition = "2018"
-description = "" # TODO:
+description = "A service that picks up work and configuration from Buildkite, and creates Kubernetes jobs to fulfill those requests"
 license = "MIT/Apache-2.0"
 repository = "https://github.com/EmbarkStudios/buildkite-jobify"
 readme = "README.md"
-keywords = [] # TODO: fill in before publishing
-categories = [] # TODO: fill in before publishing
-publish = false # not yet
+keywords = ["buildkite", "k8s", "kubernetes", "ci"]
 
 [dependencies]
-crossbeam = "0.7.1"
-env_logger = "0.6.1"
-failure = "0.1.5"
-graphql_client = "0.7.0"
-http = "0.1.17"
-log = "0.4.6"
+anyhow = "1.0.26"
+app_dirs2 = "2.0.4"
+base64 = "0.11.0"
+bytes = "0.5.4"
+crossbeam = "0.7.3"
+flate2 = { version = "1.0.13", default-features = false, features = ["rust_backend"] }
+futures = "0.3.4"
+graphql_client = "0.8.0"
+http = "0.2.0"
 lru_time_cache = "0.9.0"
-reqwest = "0.9.17"
-serde = "1.0.91"
-serde_derive = "1.0.91"
-serde_json = "1.0.39"
-serde_yaml = "0.8.9"
-tar = "0.4.25"
-tokio-timer = "0.2.11"
-toml = "0.5.1"
-smush = { version = "0.1.4", default-features = false, features = ["gzip_support"] }
-structopt = "0.2.15"
-structopt-flags = "0.3.1"
-twox-hash = "1.3.0"
-uuid = { version = "0.7.4", default-features = false, features = ["v4"] }
-
-[dependencies.futures]
-version = "=0.3.0-alpha.14"
-package = "futures-preview"
-features = ["compat"]
-
-[dependencies.kubernetes]
-git = "https://github.com/EmbarkStudios/kubernetes-rust.git"
-rev = "3091491"
-#path = "../kubernetes-rust"
-
-[dependencies.k8s-openapi]
-git = "https://github.com/Arnavion/k8s-openapi-codegen"
-rev = "b5b46233b7752f0a99a106c9c7d07f7387c41787"
-features = ["v1_14"]
-
-[dependencies.futures01]
-version = "0.1.27"
-package = "futures"
+openssl = { version = "0.10.28", features = ["vendored"] }
+reqwest = { version = "0.10.2", default-features = false, features = ["json", "native-tls"] }
+serde = { version = "1.0.104", features = ["derive"] }
+serde_json = "1.0.48"
+serde_yaml = "0.8.11"
+tar = "0.4.26"
+toml = "0.5.6"
+structopt = "0.3.9"
+tame-oauth = { version = "0.4.2", features = ["gcp"] }
+tracing = "0.1.12"
+tracing-subscriber = "0.2.1"
+twox-hash = "1.5.0"
+uuid = { version = "0.8.1", default-features = false, features = ["v4"] }
 
 [dependencies.tokio]
-git = "https://github.com/tokio-rs/tokio"
-rev = "0e400af78c049c4b52fa4cb346237b43218b0ec9"
-features = ["async-await-preview"]
+version = "0.2.11"
+features = ["rt-threaded", "rt-util", "macros", "time"]
+
+[dependencies.k8s-openapi]
+version = "0.7.1"
+features = ["v1_17"]

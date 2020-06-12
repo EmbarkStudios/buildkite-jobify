@@ -2,13 +2,8 @@ use crate::{
     jobifier::Jobifier,
     monitor::{BkErr, Monitor},
 };
-use futures::{
-    channel::mpsc,
-    future::{FutureExt, TryFutureExt},
-    sink::SinkExt,
-    stream::StreamExt,
-};
-use tokio::await as async_wait;
+use futures::{channel::mpsc, sink::SinkExt, stream::StreamExt};
+use std::fmt;
 
 pub struct Scheduler {
     monitor: Monitor,
@@ -16,10 +11,25 @@ pub struct Scheduler {
     waiter: (mpsc::UnboundedSender<()>, mpsc::UnboundedReceiver<()>),
 }
 
-#[derive(Fail, Debug)]
+#[derive(Debug)]
 pub enum Error {
-    #[fail(display = "Buildkite error {}", _0)]
-    Buildkite(#[fail(cause)] BkErr),
+    Buildkite(BkErr),
+}
+
+impl std::error::Error for Error {
+    fn source(&self) -> Option<&(dyn std::error::Error + 'static)> {
+        match self {
+            Self::Buildkite(s) => Some(s),
+        }
+    }
+}
+
+impl fmt::Display for Error {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::Buildkite(bk) => write!(f, "{}", bk),
+        }
+    }
 }
 
 impl Scheduler {
@@ -32,21 +42,23 @@ impl Scheduler {
     }
 
     pub async fn watch<'a>(&'a self, pipeline: &'a str) -> Result<(), Error> {
-        let mut channel = async_wait!(self.monitor.watch(pipeline)).map_err(Error::Buildkite)?;
+        let mut channel = self
+            .monitor
+            .watch(pipeline)
+            .await
+            .map_err(Error::Buildkite)?;
         let mut enqueue = self.jobifier.queue();
         let mut waiter = self.waiter.0.clone();
 
         let schedule = async move {
-            while let Some(builds) = async_wait!(channel.next()) {
-                if async_wait!(enqueue.send(builds)).is_err() {
+            while let Some(builds) = channel.next().await {
+                if enqueue.send(builds).await.is_err() {
                     break;
                 }
             }
 
-            let _ = async_wait!(waiter.send(()));
+            let _ = waiter.send(()).await;
         };
-
-        let schedule = schedule.unit_error().boxed().compat();
 
         tokio::spawn(schedule);
 
@@ -54,6 +66,6 @@ impl Scheduler {
     }
 
     pub async fn wait(mut self) {
-        while let Some(_) = async_wait!(self.waiter.1.next()) {}
+        while let Some(_) = self.waiter.1.next().await {}
     }
 }

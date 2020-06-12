@@ -1,0 +1,111 @@
+apiVersion: v1
+kind: Namespace
+metadata:
+  name: "buildkite"
+
+---
+apiVersion: v1
+kind: ServiceAccount
+metadata:
+  name: buildkite-jobify
+  namespace: buildkite
+  labels:
+    app: buildkite-jobify
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRole
+metadata:
+  name: buildkite-jobify
+rules:
+  - apiGroups:
+    - ""
+    - extensions
+    - apps
+    - batch
+    resources:
+    - jobs
+    - pods
+    verbs:
+    - get
+    - create
+    - delete
+    - list
+    - update
+
+---
+apiVersion: rbac.authorization.k8s.io/v1
+kind: ClusterRoleBinding
+metadata:
+  name: buildkite-jobify
+roleRef:
+  apiGroup: rbac.authorization.k8s.io
+  kind: ClusterRole
+  name: buildkite-jobify
+subjects:
+  - kind: ServiceAccount
+    name: buildkite-jobify
+    namespace: buildkite
+
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  labels:
+    app: "buildkite-jobify"
+  name: buildkite-jobify
+  annotations:
+    keel.sh/trigger: poll
+    keel.sh/policy: minor
+    keel.sh/pollSchedule: "@every 1m"
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: "buildkite-jobify"
+  template:
+    metadata:
+      labels:
+        app: "buildkite-jobify"
+    spec:
+      serviceAccountName: buildkite-jobify
+      containers:
+      - name: buildkite-jobify
+        image: "eu.gcr.io/ark-infra/buildkite-jobify:0.3.1"
+        command: ["/jobify/buildkite-jobify"]
+        args: ["--org", "embark-studios", "-c", "/jobify-config/config.toml"]
+        imagePullPolicy: "IfNotPresent"
+        securityContext:
+          privileged: true
+        resources:
+          requests:
+            cpu: 100m
+            memory: 50Mi
+        env:
+        - name: "TERM"
+          value: "dumb"
+        # Add your Buildkite API token as a secret
+        - name: "BUILDKITE_API_TOKEN"
+          valueFrom:
+            secretKeyRef:
+              name: "buildkite-api"
+              key: "token"
+        # GCP service account credentials used to access the Kubernetes API
+        - name: GOOGLE_APPLICATION_CREDENTIALS
+          value: /sekretz/creds.json
+        volumeMounts:
+        - name: jobify-cfg
+          mountPath: "/jobify-config"
+        - name: creds
+          mountPath: /sekretz
+      volumes:
+      # Use a configmap for your config file specifying the pipelines etc to watch, or
+      # just specify them in the args above
+      - name: jobify-cfg
+        configMap:
+          name: bk-jobify-cfg
+      - name: creds
+        secret:
+          secretName: k8s-svc-acct
