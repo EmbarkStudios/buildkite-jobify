@@ -1,7 +1,9 @@
 # 👷 buildkite-jobify
 
-[![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4%20adopted-ff69b4.svg)](CODE_OF_CONDUCT.md)
-[![Embark](https://img.shields.io/badge/embark-open%20source-blueviolet.svg)](http://embark.games)
+[![Embark](https://img.shields.io/badge/embark-open%20source-blueviolet.svg)](https://embark.dev)
+[![Embark](https://img.shields.io/badge/discord-ark-%237289da.svg?logo=discord)](https://discord.gg/dAuKfZS)
+[![dependency status](https://deps.rs/repo/github/EmbarkStudios/buildkite-jobify/status.svg)](https://deps.rs/repo/github/EmbarkStudios/buildkite-jobify)
+[![Build status](https://github.com/EmbarkStudios/buildkite-jobify/workflows/CI/badge.svg)](https://github.com/EmbarkStudios/buildkite-jobify/actions)
 
 Watches 1 or more Buildkite pipelines via the GraphQL API to kick off temporary Kubernetes jobs that (presumably)
 spin up Buildkite agents to pick up the Buildkite jobs that Buildkite has scheduled but not yet found an agent for.
@@ -55,6 +57,8 @@ buildkite-agent pipeline upload "$(dirname "$0")/pipeline.yml"
 ```
 
 ## Contributing
+
+[![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](../CODE_OF_CONDUCT.md)
 
 We welcome community contributions to this project.
 
