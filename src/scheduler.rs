@@ -66,6 +66,6 @@ impl Scheduler {
     }
 
     pub async fn wait(mut self) {
-        while let Some(_) = self.waiter.1.next().await {}
+        while self.waiter.1.next().await.is_some() {}
     }
 }

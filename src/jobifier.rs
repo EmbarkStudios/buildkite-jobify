@@ -106,22 +106,18 @@ async fn get_jobify_config<'a>(
         let mut files = BTreeMap::new();
 
         for mut file in archive.entries()?.filter_map(|f| f.ok()) {
-            match file.header().entry_type() {
-                tar::EntryType::Regular => {
-                    let mut s =
-                        String::with_capacity(file.header().size().unwrap_or(1024) as usize);
-                    if file.read_to_string(&mut s).is_ok() {
-                        let path = file.header().path().context("failed to get path in tar")?;
-                        // Strip off leading ./ since they just add noise
-                        let path = PathBuf::from(match path.strip_prefix("./") {
-                            Ok(p) => std::borrow::Cow::Borrowed(p),
-                            _ => path,
-                        });
+            if let tar::EntryType::Regular = file.header().entry_type() {
+                let mut s = String::with_capacity(file.header().size().unwrap_or(1024) as usize);
+                if file.read_to_string(&mut s).is_ok() {
+                    let path = file.header().path().context("failed to get path in tar")?;
+                    // Strip off leading ./ since they just add noise
+                    let path = PathBuf::from(match path.strip_prefix("./") {
+                        Ok(p) => std::borrow::Cow::Borrowed(p),
+                        _ => path,
+                    });
 
-                        files.insert(path, s);
-                    }
+                    files.insert(path, s);
                 }
-                _ => {}
             }
         }
 
@@ -140,7 +136,7 @@ async fn get_jobify_config<'a>(
     for (name, path) in agents
         .agents
         .iter()
-        .filter_map(|a| a.kubernetes.as_ref().and_then(|k| Some((&a.name, k))))
+        .filter_map(|a| a.kubernetes.as_ref().map(|k| (&a.name, k)))
     {
         match files.get(path) {
             Some(cfg) => {
@@ -494,30 +490,28 @@ async fn jobify(
                     .filter(|j| j.state == monitor::JobStates::Scheduled)
                     .count()
                     > 0
+                    && !configs.contains_key(chksum)
                 {
-                    if !configs.contains_key(chksum) {
-                        if let Some(artifact_id) = build.metadata.get("jobify-artifact-id") {
-                            let val =
-                                match get_jobify_config(&client, &bk_token, chksum, artifact_id)
-                                    .await
-                                {
-                                    Ok(cfg) => Some(cfg),
-                                    Err(err) => {
-                                        // If we fail to find the artifact-id we just assume
-                                        // that something went wrong and mark the config
-                                        // as invalid and stop checking
+                    if let Some(artifact_id) = build.metadata.get("jobify-artifact-id") {
+                        let val = match get_jobify_config(&client, &bk_token, chksum, artifact_id)
+                            .await
+                        {
+                            Ok(cfg) => Some(cfg),
+                            Err(err) => {
+                                // If we fail to find the artifact-id we just assume
+                                // that something went wrong and mark the config
+                                // as invalid and stop checking
 
-                                        // TODO: Add this into a queue to retry later
-                                        error!(
-                                            "failed to get jobify configuration for build {}: {}",
-                                            build.uuid, err
-                                        );
-                                        None
-                                    }
-                                };
+                                // TODO: Add this into a queue to retry later
+                                error!(
+                                    "failed to get jobify configuration for build {}: {}",
+                                    build.uuid, err
+                                );
+                                None
+                            }
+                        };
 
-                            configs.insert(chksum.to_owned(), val);
-                        }
+                        configs.insert(chksum.to_owned(), val);
                     }
                 }
             }
@@ -551,7 +545,7 @@ async fn jobify(
                                             name, job.label, job.uuid,
                                         );
 
-                                        known_jobs.insert(job.uuid.clone(), None);
+                                        known_jobs.insert(job.uuid, None);
                                         pending_agents.insert(name);
                                     }
                                     Err(e) => {
@@ -583,16 +577,13 @@ async fn jobify(
             for (job_id, agent) in build
                 .jobs
                 .iter()
-                .filter_map(|j| j.agent.as_ref().and_then(|an| Some((j.uuid, an))))
+                .filter_map(|j| j.agent.as_ref().map(|an| (j.uuid, an)))
             {
                 let agent = agent.clone();
                 if pending_agents.remove(&agent) {
-                    match known_jobs.get_mut(&job_id) {
-                        Some(v) => {
-                            info!("job {} running on agent {}", job_id, agent);
-                            *v = Some(agent);
-                        }
-                        None => {}
+                    if let Some(v) = known_jobs.get_mut(&job_id) {
+                        info!("job {} running on agent {}", job_id, agent);
+                        *v = Some(agent);
                     }
                 }
             }
@@ -604,7 +595,7 @@ async fn jobify(
             .flat_map(|b| {
                 b.jobs
                     .into_iter()
-                    .filter_map(|j| j.exit_status.and_then(|es| Some((j.uuid, es))))
+                    .filter_map(|j| j.exit_status.map(|es| (j.uuid, es)))
             })
             .collect();
 

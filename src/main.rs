@@ -189,7 +189,8 @@ async fn real_main() -> Result<(), Error> {
         }
     };
 
-    Ok(scheduler.wait().await)
+    scheduler.wait().await;
+    Ok(())
 }
 
 #[tokio::main]

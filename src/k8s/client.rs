@@ -1,5 +1,4 @@
 use anyhow::Error;
-use http;
 use serde::{de::DeserializeOwned, Deserialize};
 use std::{fmt, sync::Arc};
 
@@ -53,7 +52,7 @@ impl APIClient {
         let json_body = res.bytes().await?;
 
         match fallback_err {
-            Ok(_) => serde_json::from_slice(&json_body).map_err(|e| Error::from(e)),
+            Ok(_) => serde_json::from_slice(&json_body).map_err(Error::from),
             Err(e) => match serde_json::from_slice::<ApiError>(&json_body) {
                 Ok(api_err) => Err(api_err.into()),
                 Err(_) => Err(e.into()),
