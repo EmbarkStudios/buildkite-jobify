@@ -5,8 +5,10 @@ targets = [
 [advisories]
 unmaintained = "deny"
 yanked = "deny"
+unsound = "allow"
 ignore = [
-    "RUSTSEC-2019-0031",
+    "RUSTSEC-2020-0016",
+    "RUSTSEC-2020-0036",
 ]
 
 [licenses]
@@ -19,9 +21,10 @@ allow = [
 ]
 copyleft = "deny"
 exceptions = [
-    { allow = ["Zlib"], name = "adler32" },
     { allow = ["ISC", "MIT", "OpenSSL"], name = "ring" },
     { allow = ["ISC"], name = "untrusted" },
+    { allow = ["BSD-2-Clause", "MIT"], name = "crossbeam-queue" },
+    { allow = ["BSD-3-Clause"], name = "instant" },
 ]
 
 [[licenses.clarify]]
@@ -46,10 +49,13 @@ deny = [
     #{ name = "ansi_term", version = "=0.11.0" },
 ]
 skip = [
-    
+    # clap uses an old version
+    { name = "ansi_term", version = "=0.11.0" },
+    { name = "base64", version = "=0.11.0" },
 ]
 skip-tree = [
     { name = "graphql_client_codegen", version = "=0.8.0" },
+    { name = "pin-project", version = "=0.4.27" },
 ]
 
 [sources]
