@@ -554,7 +554,7 @@ impl Monitor {
                 "watching pipeline {}({}) '{}'",
                 pipeline_name,
                 pipeline_id,
-                pipeline_description.unwrap_or_default()
+                pipeline_description.as_deref().unwrap_or("<none>")
             );
 
             // Currently we just poll aggressively, a better option would be to add
@@ -627,12 +627,12 @@ impl Monitor {
 
 async fn get_builds<'a>(
     client: &'a Client,
-    pipeline_id: &'a String,
+    pipeline_id: &'a str,
     known_builds: &'a mut Vec<KnownBuild>,
     query_hash: &'a mut Option<u64>,
 ) -> Result<Option<Vec<Build>>, BkErr> {
     let req_body = GetRunningBuilds::build_query(get_running_builds::Variables {
-        id: pipeline_id.clone(),
+        id: pipeline_id.to_owned(),
     });
 
     let (res_body, _hash) =
@@ -645,8 +645,8 @@ async fn get_builds<'a>(
             _ => None,
         })
         .and_then(|in_builds| in_builds.edges)
-        .and_then(|builds| {
-            let builds: Vec<_> = builds
+        .map(|builds| {
+            builds
                 .into_iter()
                 .filter_map(|n| n.and_then(|n| n.node))
                 .filter_map(|build| {
@@ -655,9 +655,7 @@ async fn get_builds<'a>(
                         commit: build.commit,
                     })
                 })
-                .collect();
-
-            Some(builds)
+                .collect::<Vec<_>>()
         });
 
     let commits: Vec<_> = known_builds
@@ -665,14 +663,14 @@ async fn get_builds<'a>(
         .map(|kb| kb.commit.clone())
         .chain(
             builds_to_check
-                .unwrap_or_else(|| Vec::new())
+                .unwrap_or_default()
                 .into_iter()
                 .map(|kb| kb.commit),
         )
         .collect();
 
     let req_body = GetBuilds::build_query(get_builds::Variables {
-        id: pipeline_id.clone(),
+        id: pipeline_id.to_owned(),
         commits: Some(commits),
     });
 
@@ -714,7 +712,7 @@ async fn get_builds<'a>(
                                         get_builds::GetBuildsNodeOnPipelineBuildsEdgesNodeJobsEdgesNode::JobTypeCommand(cmd) => {
                                             Some(Job {
                                                 uuid: parse_uuid!(&cmd.uuid),
-                                                build_uuid: uuid.clone(),
+                                                build_uuid: uuid,
                                                 label: cmd.label.unwrap_or_else(|| "<unlabeled>".to_owned()),
                                                 state: cmd.state.into(),
                                                 query_rules: cmd.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
@@ -740,13 +738,13 @@ async fn get_builds<'a>(
 
                         if let Some(md) = build.triggered_from.and_then(|tf| tf.build.and_then(|b| b.meta_data.and_then(|md| md.edges))) {
                             meta.extend(md.into_iter().filter_map(|e| {
-                                e.and_then(|e| e.node.and_then(|kv| Some((kv.key, kv.value))))
+                                e.and_then(|e| e.node.map(|kv| (kv.key, kv.value)))
                             }));
                         }
 
                         if let Some(md) = build.meta_data.and_then(|md| md.edges) {
                             meta.extend(md.into_iter().filter_map(|e| {
-                                e.and_then(|e| e.node.and_then(|kv| Some((kv.key, kv.value))))
+                                e.and_then(|e| e.node.map(|kv| (kv.key, kv.value)))
                             }));
                         }
 
@@ -778,7 +776,7 @@ async fn get_builds<'a>(
     if let Some(ref builds) = builds {
         known_builds.extend(builds.iter().filter_map(|b| match b.state {
             BuildStates::Running => Some(KnownBuild {
-                uuid: b.uuid.clone(),
+                uuid: b.uuid,
                 commit: b.commit.clone(),
             }),
             _ => None,
