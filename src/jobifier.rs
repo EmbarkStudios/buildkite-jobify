@@ -550,7 +550,7 @@ async fn jobify(
                                     }
                                     Err(e) => {
                                         warn!(
-                                            "failed to spawn job for {}({}): {}",
+                                            "failed to spawn job for {}({}): {:#}",
                                             job.uuid, job.label, e
                                         );
                                     }
