@@ -1,7 +1,9 @@
-FROM rust:1.48.0 as build
+FROM rust:1.49.0 as build
 
-RUN apt-get update && apt-get install musl-tools -y
-RUN rustup target add x86_64-unknown-linux-musl
+RUN set -eux; \
+    apt-get update; \
+    apt-get install musl-tools -y; \
+    rustup target add x86_64-unknown-linux-musl;
 
 WORKDIR /usr/src
 
