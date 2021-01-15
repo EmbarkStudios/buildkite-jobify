@@ -97,7 +97,7 @@ async fn get_jobify_config<'a>(
 
     // Just assume gzipped tar for now
     let files = {
-        use bytes::buf::BufExt;
+        use bytes::buf::Buf;
         let reader = res_body.reader();
 
         let decoder = flate2::read::GzDecoder::new(reader);
@@ -290,24 +290,18 @@ async fn spawn_job<'a>(
     }
 
     {
-        if k8_job.metadata.is_none() {
-            k8_job.metadata = Some(Default::default())
+        k8_job.metadata.name = Some(agent_name.clone());
+
+        if k8_job.metadata.labels.is_none() {
+            k8_job.metadata.labels = Some(Default::default());
         }
 
-        if let Some(ref mut md) = k8_job.metadata {
-            md.name = Some(agent_name.clone());
-
-            if md.labels.is_none() {
-                md.labels = Some(Default::default());
-            }
-
-            if let Some(ref mut l) = md.labels {
-                for (k, v) in &labels {
-                    match l.get_mut(k) {
-                        Some(old) => *old = v.to_string(),
-                        None => {
-                            l.insert(k.to_string(), v.to_string());
-                        }
+        if let Some(k8_labels) = &mut k8_job.metadata.labels {
+            for (k, v) in &labels {
+                match k8_labels.get_mut(k) {
+                    Some(old) => *old = v.to_string(),
+                    None => {
+                        k8_labels.insert(k.to_string(), v.to_string());
                     }
                 }
             }
@@ -430,8 +424,8 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
                 if status.state.and_then(|s| s.terminated).is_some() {
                     if let Some(agent_name) = pod
                         .metadata
+                        .labels
                         .as_ref()
-                        .and_then(|md| md.labels.as_ref())
                         .and_then(|labels| labels.get("job-name"))
                     {
                         let (req, _) = match batch::Job::delete_namespaced_job(
