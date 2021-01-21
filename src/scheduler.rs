@@ -41,10 +41,10 @@ impl Scheduler {
         }
     }
 
-    pub async fn watch<'a>(&'a self, pipeline: &'a str) -> Result<(), Error> {
+    pub async fn watch<'a>(&'a self, pipeline_slug: &'a str) -> Result<(), Error> {
         let mut channel = self
             .monitor
-            .watch(pipeline)
+            .watch(pipeline_slug)
             .await
             .map_err(Error::Buildkite)?;
         let mut enqueue = self.jobifier.queue();

@@ -7,6 +7,7 @@ use tracing::error;
 use tracing_subscriber::filter::LevelFilter;
 
 #[derive(Deserialize)]
+#[serde(rename_all = "kebab-case")]
 struct Config {
     /// The slug of the organization to watch
     organization: Option<String>,
@@ -14,8 +15,8 @@ struct Config {
     api_token: Option<String>,
     /// The namespace under which kubernetes jobs are created
     namespace: Option<String>,
-    /// The list of pipelines within the organization to watch
-    pipelines: Vec<String>,
+    /// The list of pipelines slugs within the organization to watch
+    pipeline_slugs: Vec<String>,
 }
 
 fn parse_level(s: &str) -> Result<LevelFilter, Error> {
@@ -59,7 +60,7 @@ Possible values:
     /// Output log messages as json
     #[structopt(long)]
     json: bool,
-    /// The pipeline(s) to watch for builds
+    /// The pipeline slug(s) to watch for builds
     #[structopt(name = "PIPELINE")]
     pipelines: Vec<String>,
 }
@@ -108,7 +109,7 @@ async fn real_main() -> Result<(), Error> {
                 organization: None,
                 api_token: None,
                 namespace: None,
-                pipelines: Vec::new(),
+                pipeline_slugs: Vec::new(),
             },
         };
 
@@ -126,7 +127,7 @@ async fn real_main() -> Result<(), Error> {
 
         if !args.pipelines.is_empty() {
             // Could also extend, but probably doesn't make sense
-            cfg.pipelines = args.pipelines;
+            cfg.pipeline_slugs = args.pipelines;
         }
 
         let org = cfg
@@ -146,15 +147,15 @@ async fn real_main() -> Result<(), Error> {
             },
         };
 
-        if cfg.pipelines.is_empty() {
-            bail!("no pipelines were provided");
+        if cfg.pipeline_slugs.is_empty() {
+            bail!("no pipelines were specified to monitor");
         }
 
         Ok((
             org,
             api_token,
             cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()),
-            cfg.pipelines,
+            cfg.pipeline_slugs,
         ))
     };
 
