@@ -7,7 +7,6 @@ unmaintained = "deny"
 yanked = "deny"
 unsound = "allow"
 ignore = [
-    "RUSTSEC-2020-0016",
     "RUSTSEC-2020-0036",
 ]
 
@@ -44,24 +43,19 @@ license-files = [
 [bans]
 multiple-versions = "deny"
 deny = [
-    # Each entry the name of a crate and a version range. If version is
-    # not specified, all versions will be matched.
-    #{ name = "ansi_term", version = "=0.11.0" },
 ]
 skip = [
     # clap uses an old version
     { name = "ansi_term", version = "=0.11.0" },
-    { name = "base64", version = "=0.11.0" },
+
+    { name = "bytes", version = "=0.5.6" },
+    { name = "cfg-if", version = "=0.1.10" },
 ]
 skip-tree = [
-    { name = "graphql_client_codegen", version = "=0.8.0" },
     { name = "pin-project", version = "=0.4.27" },
 ]
 
 [sources]
 unknown-registry = "warn"
-# Lint level for what to happen when a crate from a git repository that is not
-# in the allow list is encountered
 unknown-git = "warn"
-# List of URLs for allowed Git repositories
 allow-git = []
