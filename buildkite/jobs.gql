@@ -1,15 +1,16 @@
 # Finds a pipeline by its name, the search is extremely
 # limited, so we get up to 10 matches and find the one
 # we actually want from that
-query FindPipeline($org: ID!, $name: String!) {
+query FindPipeline($org: ID!) {
   node(id: $org) {
     __typename
     ... on Organization {
-      pipelines(first: 10, search: $name) {
+      pipelines(first: 100) {
         edges {
           node {
             id
             name
+            slug
             description
             repository {
               url

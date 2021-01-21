@@ -494,11 +494,10 @@ impl Monitor {
 
     pub async fn watch<'a>(
         &'a self,
-        pipeline: &'a str,
+        pipeline_slug: &'a str,
     ) -> Result<futures::channel::mpsc::Receiver<Builds>, BkErr> {
         let req_body = FindPipeline::build_query(find_pipeline::Variables {
             org: self.org_id.clone(),
-            name: pipeline.to_owned(),
         });
 
         let (res_body, _) =
@@ -521,8 +520,8 @@ impl Monitor {
                         if let Some(edge) = edge {
                             if let Some(ref node) = edge.node {
                                 // Return the first pipeline that exactly
-                                // matches the specified name
-                                return node.name == pipeline;
+                                // matches the specified slug
+                                return node.slug == pipeline_slug;
                             }
                         }
 
@@ -535,7 +534,7 @@ impl Monitor {
                 }
             })
             .and_then(|edge| edge.node)
-            .ok_or_else(|| BkErr::UnknownPipeline(pipeline.to_owned()))?;
+            .ok_or_else(|| BkErr::UnknownPipeline(pipeline_slug.to_owned()))?;
 
         let crate::monitor::find_pipeline::FindPipelineNodeOnOrganizationPipelinesEdgesNode {
             name: pipeline_name,
