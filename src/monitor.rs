@@ -561,15 +561,15 @@ impl Monitor {
             // then posts a cloud pubsub message that we listen to instead as it should
             // be much lower cost for everyone involved, at the expense of additional
             // complexity
-            let mut interval = tokio::time::interval(std::time::Duration::from_secs(1));
-
-            let mut failure_count = 0u8;
+            let mut failure_count = 0u32;
             let mut query_hash = None;
             let mut known_builds = Vec::new();
-            const MAX_FAILURES: u8 = 100;
+
+            let mut sleep = 1;
 
             loop {
-                interval.tick().await;
+                tokio::time::sleep(std::time::Duration::from_secs(sleep)).await;
+
                 let builds =
                     match get_builds(&client, &pipeline_id, &mut known_builds, &mut query_hash)
                         .await
@@ -578,6 +578,7 @@ impl Monitor {
                             if failure_count > 0 {
                                 info!("successfully sent query after {} failures", failure_count);
                                 failure_count = 0;
+                                sleep = 1;
                             }
 
                             match builds {
@@ -591,17 +592,16 @@ impl Monitor {
                         }
                         Err(err) => {
                             failure_count += 1;
+                            sleep *= 2;
 
-                            if failure_count >= MAX_FAILURES {
-                                error!(
-                                    "stopping query for {}, too many failures: {}",
-                                    pipeline_name, err
-                                );
-                                break;
-                            } else {
-                                warn!("failed to send query {}: {}", failure_count, err);
-                                continue;
-                            }
+                            // cap at 60 seconds
+                            sleep = std::cmp::min(sleep, 60);
+
+                            warn!(
+                                "failed to send query {} time(s) in a row: {}",
+                                failure_count, err
+                            );
+                            continue;
                         }
                     };
 
@@ -624,11 +624,11 @@ impl Monitor {
     }
 }
 
-async fn get_builds<'a>(
-    client: &'a Client,
-    pipeline_id: &'a str,
-    known_builds: &'a mut Vec<KnownBuild>,
-    query_hash: &'a mut Option<u64>,
+async fn get_builds(
+    client: &Client,
+    pipeline_id: &str,
+    known_builds: &mut Vec<KnownBuild>,
+    query_hash: &mut Option<u64>,
 ) -> Result<Option<Vec<Build>>, BkErr> {
     let req_body = GetRunningBuilds::build_query(get_running_builds::Variables {
         id: pipeline_id.to_owned(),
