@@ -8,7 +8,8 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
 ### Changed
-- [PR#23](https://github.com/EmbarkStudios/buildkite-jobify/pull/23) resolved [#8](https://github.com/EmbarkStudios/buildkite-jobify/issues/8) cy changing the configuration of which pipelines to watch from using the user facing name, eg `prefix/name-of-the-thing", to the pipeline's slug, eg `prefix-name-of-the-thing`.
+- [PR#26](https://github.com/EmbarkStudios/buildkite-jobify/pull/26) resolved [#5](https://github.com/EmbarkStudios/buildkite-jobify/issues/5) by introducing a `clusters` CLI argument and agents.toml config field so that a particular jobify instance will only start jobs with the same cluster.
+- [PR#23](https://github.com/EmbarkStudios/buildkite-jobify/pull/23) resolved [#8](https://github.com/EmbarkStudios/buildkite-jobify/issues/8) by changing the configuration of which pipelines to watch from using the user facing name, eg `prefix/name-of-the-thing`, to the pipeline's slug, eg `prefix-name-of-the-thing`.
 
 ## [0.4.0] - 2020-06-12
 ### Added
