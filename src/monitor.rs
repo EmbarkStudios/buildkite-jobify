@@ -30,7 +30,7 @@ struct OrgAccess;
     query_path = "buildkite/jobs.gql",
     response_derives = "Debug"
 )]
-struct FindPipeline;
+struct GetPipelineById;
 
 #[derive(GraphQLQuery)]
 #[graphql(
@@ -373,15 +373,10 @@ impl std::cmp::Eq for Build {}
 pub struct Builds {
     pub builds: Vec<Build>,
     pub pipeline: String,
-    pub org: String,
 }
 
 // Monitors Buildkite's GraphQL API for events of interest
 pub struct Monitor {
-    // The organization identifier, this can be specified exactly or queried
-    // from Buildkite during initialization
-    org_id: String,
-    org_slug: String,
     client: Client,
 }
 
@@ -412,7 +407,7 @@ impl std::cmp::PartialEq for KnownBuild {
 impl std::cmp::Eq for KnownBuild {}
 
 impl Monitor {
-    pub async fn with_org_id(token: String, id: String) -> Result<Monitor, BkErr> {
+    pub async fn with_token(token: String) -> Result<Monitor, BkErr> {
         use http::{header::AUTHORIZATION, HeaderMap};
         let mut headers = HeaderMap::new();
 
@@ -428,116 +423,38 @@ impl Monitor {
             .default_headers(headers)
             .build()?;
 
-        // Verify the id is correct and we have access to it
-        let req_body = OrgAccess::build_query(org_access::Variables { id: id.clone() });
-
-        let (res_body, _) =
-            send_request::<_, org_access::ResponseData>(&client, &req_body, None).await?;
-
-        // Just verify the ids match as a sanity check, the operation
-        // completing without an error is enough to know we can
-        // continue making API calls
-        let res_id = res_body
-            .and_then(|rd| rd.node)
-            .ok_or_else(|| BkErr::InvalidOrgId(id.clone()))?;
-
-        if res_id.id != id {
-            return Err(BkErr::InvalidOrgId(id));
-        }
-
-        let slug = match res_id.on {
-            org_access::OrgAccessNodeOn::Organization(org) => {
-                info!(
-                    "created monitor for organization {}({})",
-                    org.slug, res_id.id
-                );
-
-                org.slug
-            }
-            _ => return Err(BkErr::InvalidOrgId(id)),
-        };
-
-        Ok(Self {
-            org_id: id,
-            org_slug: slug,
-            client,
-        })
+        Ok(Self { client })
     }
 
-    pub async fn with_org_slug(token: String, slug: &str) -> Result<Monitor, BkErr> {
-        let req_body = OrgId::build_query(org_id::Variables {
-            slug: slug.to_owned(),
-        });
-
-        let client = Client::new();
-        let res = client
-            .post(crate::BK_API_URL)
-            .bearer_auth(&token)
-            .json(&req_body)
-            .send()
-            .await?;
-
-        let res_body: Response<org_id::ResponseData> = res.json().await?;
-
-        let id = res_body
-            .data
-            .and_then(|rd| rd.organization)
-            .ok_or_else(|| BkErr::UnknownOrg(slug.to_owned()))?;
-
-        info!("resolved slug '{}' to id '{}'", slug, id.id);
-
-        Self::with_org_id(token, id.id).await
-    }
-
+    #[inline]
     pub fn client(&self) -> Client {
         self.client.clone()
     }
 
     pub async fn watch<'a>(
         &'a self,
-        pipeline_slug: &'a str,
+        pipeline_identifier: &'a str,
     ) -> Result<futures::channel::mpsc::Receiver<Builds>, BkErr> {
-        let req_body = FindPipeline::build_query(find_pipeline::Variables {
-            org: self.org_id.clone(),
+        let req_body = GetPipelineById::build_query(get_pipeline_by_id::Variables {
+            id: pipeline_identifier.to_owned(),
         });
 
         let (res_body, _) =
-            send_request::<_, find_pipeline::ResponseData>(&self.client, &req_body, None).await?;
+            send_request::<_, get_pipeline_by_id::ResponseData>(&self.client, &req_body, None)
+                .await?;
 
         let pipeline = res_body
-            .and_then(|root| {
-                if let Some(node) = root.node {
-                    match node.on {
-                        find_pipeline::FindPipelineNodeOn::Organization(org) => org.pipelines,
-                        _ => None,
-                    }
+            .and_then(|root| root.node.map(|rn| rn.on))
+            .and_then(|n| {
+                if let get_pipeline_by_id::GetPipelineByIdNodeOn::Pipeline(pipeline) = n {
+                    Some(pipeline)
                 } else {
                     None
                 }
             })
-            .and_then(|pipelines| {
-                if let Some(mut edges) = pipelines.edges {
-                    let index = edges.iter().position(|edge| {
-                        if let Some(edge) = edge {
-                            if let Some(ref node) = edge.node {
-                                // Return the first pipeline that exactly
-                                // matches the specified slug
-                                return node.slug == pipeline_slug;
-                            }
-                        }
+            .ok_or_else(|| BkErr::UnknownPipeline(pipeline_identifier.to_owned()))?;
 
-                        false
-                    });
-
-                    index.map(|i| edges.swap_remove(i).unwrap())
-                } else {
-                    None
-                }
-            })
-            .and_then(|edge| edge.node)
-            .ok_or_else(|| BkErr::UnknownPipeline(pipeline_slug.to_owned()))?;
-
-        let crate::monitor::find_pipeline::FindPipelineNodeOnOrganizationPipelinesEdgesNode {
+        let get_pipeline_by_id::GetPipelineByIdNodeOnPipeline {
             name: pipeline_name,
             id: pipeline_id,
             description: pipeline_description,
@@ -547,7 +464,6 @@ impl Monitor {
         let (mut tx, rx) = futures::channel::mpsc::channel(100);
 
         let client = self.client.clone();
-        let org_slug = self.org_slug.clone();
 
         let poll = async move {
             info!(
@@ -586,7 +502,6 @@ impl Monitor {
                                 Some(builds) => Builds {
                                     builds,
                                     pipeline: pipeline_name.clone(),
-                                    org: org_slug.clone(),
                                 },
                                 None => continue,
                             }

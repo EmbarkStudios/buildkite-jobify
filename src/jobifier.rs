@@ -176,8 +176,6 @@ struct JobInfo<'a> {
     bk_job: &'a monitor::Job,
     /// The slug for the pipeline the job is part of
     pipeline: &'a str,
-    /// The slug for the organization the pipeline is a part of
-    org: &'a str,
     /// The agent description that will execute the job
     agent: &'a Agent,
 }
@@ -193,7 +191,6 @@ async fn spawn_job<'a>(
     let labels = {
         let mut labels = BTreeMap::new();
         labels.insert("bk-jobify".to_owned(), "true".to_owned());
-        labels.insert("bk-org".to_owned(), nfo.org.to_owned());
         labels.insert("bk-pipeline".to_owned(), nfo.pipeline.to_owned());
         labels
     };
@@ -405,7 +402,6 @@ fn get_best_agent<'a>(
 async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> Result<u32, Error> {
     // We just aggressively delete all pods that match our labels, instead
     // of more carefully only deleting pods for jobs that are known to be completed
-
     let label_selector = format!("bk-jobify=true,bk-pipeline={}", pipeline);
 
     // TODO: Use watches
@@ -542,7 +538,6 @@ async fn jobify(
                                 let job_info = JobInfo {
                                     bk_job: job,
                                     pipeline: &builds.pipeline,
-                                    org: &builds.org,
                                     agent,
                                 };
 

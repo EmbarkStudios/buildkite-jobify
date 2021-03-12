@@ -1,22 +1,15 @@
-# Finds a pipeline by its name, the search is extremely
-# limited, so we get up to 10 matches and find the one
-# we actually want from that
-query FindPipeline($org: ID!) {
-  node(id: $org) {
+# Gets a pipeline via its identifier. You can locate the pipeline identifier in
+# the general settings for the pipeline
+query GetPipelineById($id: ID!) {
+  node(id: $id) {
     __typename
-    ... on Organization {
-      pipelines(first: 100) {
-        edges {
-          node {
-            id
-            name
-            slug
-            description
-            repository {
-              url
-            }
-          }
-        }
+    ... on Pipeline {
+      id
+      name
+      slug
+      description
+      repository {
+        url
       }
     }
   }
