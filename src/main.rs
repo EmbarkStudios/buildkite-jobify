@@ -60,14 +60,12 @@ use tracing_subscriber::filter::LevelFilter;
 #[derive(Deserialize)]
 #[serde(rename_all = "kebab-case")]
 struct Config {
-    /// The slug of the organization to watch
-    organization: Option<String>,
     /// The API token used for communicating with the Buildkite API, **must** have GraphQL enabled
     api_token: Option<String>,
     /// The namespace under which kubernetes jobs are created
     namespace: Option<String>,
-    /// The list of pipelines slugs within the organization to watch
-    pipeline_slugs: Vec<String>,
+    /// The list of pipeline identifiers within the organization to watch
+    pipelines: Vec<String>,
     /// Cluster filter, only agents specified with the same cluster will be spawned
     cluster: Option<String>,
 }
@@ -83,9 +81,6 @@ struct Opts {
     /// Path to a configuration file
     #[structopt(short, long, parse(from_os_str))]
     config: Option<PathBuf>,
-    /// The organization slug to watch
-    #[structopt(short, long)]
-    org: Option<String>,
     /// The API token used for communicating with the Buildkite API, **must** have GraphQL enabled.
     /// If not specified, the value is taken from the configuration file,
     /// or the `BUILDKITE_API_TOKEN` environment variable
@@ -117,7 +112,7 @@ Possible values:
     /// Output log messages as json
     #[structopt(long)]
     json: bool,
-    /// The pipeline slug(s) to watch for builds
+    /// The pipeline identifiers to watch for builds
     #[structopt(name = "PIPELINE")]
     pipelines: Vec<String>,
 }
@@ -163,17 +158,12 @@ async fn real_main() -> Result<(), Error> {
                 })?
             }
             None => Config {
-                organization: None,
                 api_token: None,
                 namespace: None,
                 cluster: None,
-                pipeline_slugs: Vec::new(),
+                pipelines: Vec::new(),
             },
         };
-
-        if let Some(o) = args.org {
-            cfg.organization = Some(o);
-        }
 
         if let Some(token) = args.api_token {
             cfg.api_token = Some(token);
@@ -189,12 +179,8 @@ async fn real_main() -> Result<(), Error> {
 
         if !args.pipelines.is_empty() {
             // Could also extend, but probably doesn't make sense
-            cfg.pipeline_slugs = args.pipelines;
+            cfg.pipelines = args.pipelines;
         }
-
-        let org = cfg
-            .organization
-            .context("no organization slug was provided")?;
 
         let api_token = match cfg.api_token {
             Some(tok) => tok,
@@ -209,20 +195,19 @@ async fn real_main() -> Result<(), Error> {
             },
         };
 
-        if cfg.pipeline_slugs.is_empty() {
+        if cfg.pipelines.is_empty() {
             bail!("no pipelines were specified to monitor");
         }
 
         Ok((
-            org,
             api_token,
             cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()),
-            cfg.pipeline_slugs,
+            cfg.pipelines,
             cfg.cluster,
         ))
     };
 
-    let (org, token, namespace, pipelines, cluster) = match get_cfg() {
+    let (token, namespace, pipelines, cluster) = match get_cfg() {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("{}", e);
@@ -231,7 +216,7 @@ async fn real_main() -> Result<(), Error> {
     };
 
     let start: Result<_, Error> = async {
-        let monitor = Monitor::with_org_slug(token.clone(), &org)
+        let monitor = Monitor::with_token(token.clone())
             .await
             .context("buildkite org monitor")?;
         let jobifier = Jobifier::create(token, namespace, cluster).context("k8s jobifier")?;
