@@ -118,7 +118,7 @@ async fn get_jobify_config<'a>(
                     // Strip off leading ./ since they just add noise
                     let path = PathBuf::from(match path.strip_prefix("./") {
                         Ok(p) => std::borrow::Cow::Borrowed(p),
-                        _ => path,
+                        Err(_) => path,
                     });
 
                     files.insert(path, s);
@@ -134,7 +134,7 @@ async fn get_jobify_config<'a>(
         .get(Path::new("agents.toml"))
         .context("'agents.toml' was not in artifact")?;
 
-    let agents: JobifyAgents = toml::from_str(&agents)?;
+    let agents: JobifyAgents = toml::from_str(agents)?;
 
     // Attempt to deserialize a Job (spec, kinda) from the agents that have one
     let mut specs = BTreeMap::new();
@@ -436,7 +436,7 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
                         .and_then(|labels| labels.get("job-name"))
                     {
                         let (req, _) = match batch::Job::delete_namespaced_job(
-                            &agent_name,
+                            agent_name,
                             &namespace,
                             k8s_openapi::DeleteOptional {
                                 propagation_policy: Some("Foreground"),
@@ -537,16 +537,16 @@ async fn jobify(
                     }
 
                     match configs.get(chksum).and_then(|cfg| cfg.as_ref()) {
-                        Some(cfg) => match get_best_agent(cfg, &job) {
+                        Some(cfg) => match get_best_agent(cfg, job) {
                             Ok((agent, spec)) => {
                                 let job_info = JobInfo {
-                                    bk_job: &job,
+                                    bk_job: job,
                                     pipeline: &builds.pipeline,
                                     org: &builds.org,
                                     agent,
                                 };
 
-                                match spawn_job(&kbctl, &job_info, &spec, &namespace).await {
+                                match spawn_job(&kbctl, &job_info, spec, &namespace).await {
                                     Ok((name, _k8_job_status)) => {
                                         info!(
                                             "spawned job {} for {}({})",
@@ -676,9 +676,9 @@ impl Agent {
             if i > 0 {
                 tags_str.push(',');
             }
-            tags_str.push_str(&k);
+            tags_str.push_str(k);
             tags_str.push('=');
-            tags_str.push_str(&v);
+            tags_str.push_str(v);
         }
 
         tags_str

@@ -5,7 +5,7 @@ use openssl::{pkcs12::Pkcs12, pkey::PKey, x509::X509};
 
 use super::apis::{AuthInfo, Cluster, Config, Context};
 
-/// KubeConfigLoader loads current context, cluster, and authentication information.
+/// [`KubeConfigLoader`] loads current context, cluster, and authentication information.
 #[derive(Debug)]
 pub struct KubeConfigLoader {
     pub current_context: Context,
@@ -51,8 +51,8 @@ impl KubeConfigLoader {
         let client_cert = &self.user.load_client_certificate()?;
         let client_key = &self.user.load_client_key()?;
 
-        let x509 = X509::from_pem(&client_cert)?;
-        let pkey = PKey::private_key_from_pem(&client_key)?;
+        let x509 = X509::from_pem(client_cert)?;
+        let pkey = PKey::private_key_from_pem(client_key)?;
 
         Pkcs12::builder()
             .build(password, "kubeconfig", &pkey, &x509)

@@ -1,7 +1,5 @@
 use std::{
     env,
-    fs::File,
-    io::Read,
     path::{Path, PathBuf},
 };
 
@@ -27,12 +25,7 @@ pub fn data_or_file_with_base64<P: AsRef<Path>>(
 ) -> Result<Vec<u8>, Error> {
     match (data, file) {
         (Some(d), _) => base64::decode(&d).map_err(Error::from),
-        (_, Some(f)) => {
-            let mut b = vec![];
-            let mut ff = File::open(f)?;
-            ff.read_to_end(&mut b)?;
-            Ok(b)
-        }
+        (_, Some(f)) => Ok(std::fs::read(f)?),
         _ => anyhow::bail!("Failed to get data/file with base64 format"),
     }
 }
@@ -43,12 +36,7 @@ pub fn data_or_file<P: AsRef<Path>>(
 ) -> Result<String, Error> {
     match (data, file) {
         (Some(d), _) => Ok(d.to_string()),
-        (_, Some(f)) => {
-            let mut s = String::new();
-            let mut ff = File::open(f)?;
-            ff.read_to_string(&mut s)?;
-            Ok(s)
-        }
+        (_, Some(f)) => Ok(std::fs::read_to_string(f)?),
         _ => anyhow::bail!("Failed to get data/file"),
     }
 }

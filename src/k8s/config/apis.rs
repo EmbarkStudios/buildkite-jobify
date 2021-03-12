@@ -1,3 +1,5 @@
+#![allow(clippy::doc_markdown)]
+
 use anyhow::Error;
 use serde::{Deserialize, Serialize};
 use std::{collections::HashMap, fs::File, path::Path};
