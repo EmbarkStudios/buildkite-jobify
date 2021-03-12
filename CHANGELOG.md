@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
+### Changed
+- Cluster can now be specified in the config as well as the CLI.
+
 ## [0.5.0] - 2021-03-12
 ### Changed
 - [PR#26](https://github.com/EmbarkStudios/buildkite-jobify/pull/26) resolved [#5](https://github.com/EmbarkStudios/buildkite-jobify/issues/5) by introducing a `clusters` CLI argument and agents.toml config field so that a particular jobify instance will only start jobs with the same cluster.
