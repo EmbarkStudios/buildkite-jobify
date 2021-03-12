@@ -28,7 +28,11 @@ pub struct Jobifier {
 }
 
 impl Jobifier {
-    pub fn create(buildkite_token: String, namespace: String) -> Result<Jobifier, Error> {
+    pub fn create(
+        buildkite_token: String,
+        namespace: String,
+        cluster: Option<String>,
+    ) -> Result<Jobifier, Error> {
         let kubeconfig = match config::load_kube_config() {
             Ok(cfg) => cfg,
             Err(_) => config::incluster_config()?,
@@ -39,7 +43,7 @@ impl Jobifier {
         let (tx, rx) = mpsc::unbounded();
 
         let spawner = async move {
-            jobify(kbctl, buildkite_token, namespace, rx).await;
+            jobify(kbctl, buildkite_token, namespace, cluster, rx).await;
         };
 
         tokio::spawn(spawner);
@@ -54,10 +58,11 @@ impl Jobifier {
 
 /// Retrieves the agent configuration from a buildkite artifact
 async fn get_jobify_config<'a>(
-    client: &'a Client,   // The HTTP client to use
-    bk_token: &'a str,    // The buildkite API token we use to query the artifact
-    chksum: &'a str,      // The sha-1 checksum to check against
-    artifact_id: &'a str, // The UUID of the artifact
+    client: &'a Client,       // The HTTP client to use
+    bk_token: &'a str,        // The buildkite API token we use to query the artifact
+    chksum: &'a str,          // The sha-1 checksum to check against
+    artifact_id: &'a str,     // The UUID of the artifact
+    cluster: Option<&'a str>, // Optional cluster filter to only spawn jobs assigned to the cluster
 ) -> Result<Config, Error> {
     use std::io::Read;
 
@@ -133,11 +138,13 @@ async fn get_jobify_config<'a>(
 
     // Attempt to deserialize a Job (spec, kinda) from the agents that have one
     let mut specs = BTreeMap::new();
-    for (name, path) in agents
-        .agents
-        .iter()
-        .filter_map(|a| a.kubernetes.as_ref().map(|k| (&a.name, k)))
-    {
+    for (name, path) in agents.agents.iter().filter_map(|a| {
+        if a.cluster.as_deref() != cluster {
+            None
+        } else {
+            a.kubernetes.as_ref().map(|k| (&a.name, k))
+        }
+    }) {
         match files.get(path) {
             Some(cfg) => {
                 let spec: batch::Job = serde_yaml::from_str(cfg).map_err(|e| {
@@ -465,6 +472,7 @@ async fn jobify(
     kbctl: APIClient,
     bk_token: String,
     namespace: String,
+    cluster: Option<String>,
     mut rx: mpsc::UnboundedReceiver<monitor::Builds>,
 ) {
     let mut known_jobs: HashMap<Uuid, Option<String>> = HashMap::new();
@@ -487,8 +495,14 @@ async fn jobify(
                     && !configs.contains_key(chksum)
                 {
                     if let Some(artifact_id) = build.metadata.get("jobify-artifact-id") {
-                        let val = match get_jobify_config(&client, &bk_token, chksum, artifact_id)
-                            .await
+                        let val = match get_jobify_config(
+                            &client,
+                            &bk_token,
+                            chksum,
+                            artifact_id,
+                            cluster.as_deref(),
+                        )
+                        .await
                         {
                             Ok(cfg) => Some(cfg),
                             Err(err) => {
@@ -642,6 +656,7 @@ struct JobifyAgents {
 struct Agent {
     name: String,
     kubernetes: Option<PathBuf>,
+    cluster: Option<String>,
     // TODO: VM
     tags: BTreeMap<String, String>,
 }

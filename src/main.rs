@@ -28,22 +28,26 @@ fn parse_level(s: &str) -> Result<LevelFilter, Error> {
 #[structopt(name = "jobify")]
 struct Opts {
     /// Path to a configuration file
-    #[structopt(short = "c", long = "config", parse(from_os_str))]
+    #[structopt(short, long, parse(from_os_str))]
     config: Option<PathBuf>,
     /// The organization slug to watch
-    #[structopt(short = "o", long = "org")]
+    #[structopt(short, long)]
     org: Option<String>,
     /// The API token used for communicating with the Buildkite API, **must** have GraphQL enabled.
     /// If not specified, the value is taken from the configuration file,
     /// or the `BUILDKITE_API_TOKEN` environment variable
-    #[structopt(short = "t", long = "api-token")]
+    #[structopt(short = "t", long)]
     api_token: Option<String>,
     /// The namespace under which kubernetes jobs are created. Defaults to "buildkite".
-    #[structopt(short = "n", long = "namespace")]
+    #[structopt(short, long)]
     namespace: Option<String>,
+    /// Optional cluster identifier, if present, only jobs tagged with the same
+    /// cluster identifier will be scheduled by this instance
+    #[structopt(long)]
+    cluster: Option<String>,
     #[structopt(
         short = "L",
-        long = "log-level",
+        long,
         default_value = "info",
         parse(try_from_str = parse_level),
         long_help = "The log level for messages, only log messages at or above the level will be emitted.
@@ -156,10 +160,11 @@ async fn real_main() -> Result<(), Error> {
             api_token,
             cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()),
             cfg.pipeline_slugs,
+            args.cluster,
         ))
     };
 
-    let (org, token, namespace, pipelines) = match get_cfg() {
+    let (org, token, namespace, pipelines, cluster) = match get_cfg() {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("{}", e);
@@ -171,7 +176,7 @@ async fn real_main() -> Result<(), Error> {
         let monitor = Monitor::with_org_slug(token.clone(), &org)
             .await
             .context("buildkite org monitor")?;
-        let jobifier = Jobifier::create(token, namespace).context("k8s jobifier")?;
+        let jobifier = Jobifier::create(token, namespace, cluster).context("k8s jobifier")?;
         let scheduler = Scheduler::new(monitor, jobifier);
 
         for pipeline in pipelines {
