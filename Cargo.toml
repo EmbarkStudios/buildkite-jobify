@@ -1,6 +1,6 @@
 [package]
 name = "buildkite-jobify"
-version = "0.5.0"
+version = "0.5.1"
 authors = ["Jake Shadle <jake.shadle@embark-studios.com>"]
 edition = "2018"
 description = "A service that picks up work and configuration from Buildkite, and creates Kubernetes jobs to fulfill those requests"

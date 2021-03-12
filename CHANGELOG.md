@@ -7,6 +7,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
+## [0.5.1] - 2021-03-12
 ### Changed
 - Cluster can now be specified in the config as well as the CLI.
 
@@ -20,6 +21,7 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - The before CHANGELOG times which we will just say are lost to history.
 
 <!-- next-url -->
-[Unreleased]: https://github.com/EmbarkStudios/buildkite-jobify/compare/0.5.0...HEAD
+[Unreleased]: https://github.com/EmbarkStudios/buildkite-jobify/compare/0.5.1...HEAD
+[0.5.1]: https://github.com/EmbarkStudios/buildkite-jobify/compare/0.5.0...0.5.1
 [0.5.0]: https://github.com/EmbarkStudios/buildkite-jobify/compare/0.4.0...0.5.0
 [0.4.0]: https://github.com/EmbarkStudios/buildkite-jobify/releases/tag/0.4.0
