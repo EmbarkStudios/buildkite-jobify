@@ -21,12 +21,13 @@ impl std::error::Error for ApiError {
 }
 
 impl fmt::Display for ApiError {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         write!(f, "{:#?}", self)
     }
 }
 
-/// APIClient requires `config::Configuration` includes client to connect with kubernetes cluster.
+/// [`APIClient`] requires [`config::Configuration`] includes client to connect
+/// with kubernetes cluster.
 #[derive(Clone)]
 pub struct APIClient {
     configuration: Arc<Configuration>,

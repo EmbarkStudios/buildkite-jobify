@@ -109,7 +109,7 @@ impl AuthProvider {
                             http::Method::POST => client.post(&uri),
                             http::Method::DELETE => client.delete(&uri),
                             http::Method::PUT => client.put(&uri),
-                            method => unimplemented!("{} not implemented", method),
+                            method => unreachable!("{} not implemented", method),
                         };
 
                         let req = builder.headers(parts.headers).body(body).build()?;

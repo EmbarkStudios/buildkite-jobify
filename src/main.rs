@@ -1,3 +1,54 @@
+// BEGIN - Embark standard lints v0.3
+// do not change or add/remove here, but one can add exceptions after this section
+// for more info see: <https://github.com/EmbarkStudios/rust-ecosystem/issues/59>
+#![deny(unsafe_code)]
+#![warn(
+    clippy::all,
+    clippy::await_holding_lock,
+    clippy::dbg_macro,
+    clippy::debug_assert_with_mut_call,
+    clippy::doc_markdown,
+    clippy::empty_enum,
+    clippy::enum_glob_use,
+    clippy::explicit_into_iter_loop,
+    clippy::filter_map_next,
+    clippy::fn_params_excessive_bools,
+    clippy::if_let_mutex,
+    clippy::imprecise_flops,
+    clippy::inefficient_to_string,
+    clippy::large_types_passed_by_value,
+    clippy::let_unit_value,
+    clippy::linkedlist,
+    clippy::lossy_float_literal,
+    clippy::macro_use_imports,
+    clippy::map_err_ignore,
+    clippy::map_flatten,
+    clippy::map_unwrap_or,
+    clippy::match_on_vec_items,
+    clippy::match_same_arms,
+    clippy::match_wildcard_for_single_variants,
+    clippy::mem_forget,
+    clippy::mismatched_target_os,
+    clippy::needless_borrow,
+    clippy::needless_continue,
+    clippy::option_option,
+    clippy::pub_enum_variant_names,
+    clippy::ref_option_ref,
+    clippy::rest_pat_in_fully_bound_structs,
+    clippy::string_add_assign,
+    clippy::string_add,
+    clippy::string_to_string,
+    clippy::suboptimal_flops,
+    clippy::todo,
+    clippy::unimplemented,
+    clippy::unnested_or_patterns,
+    clippy::unused_self,
+    clippy::verbose_file_reads,
+    future_incompatible,
+    nonstandard_style,
+    rust_2018_idioms
+)]
+
 use anyhow::{anyhow, bail, Context, Error};
 use buildkite_jobify::{jobifier::Jobifier, monitor::Monitor, scheduler::Scheduler};
 use serde::Deserialize;
@@ -21,29 +72,33 @@ struct Config {
 
 fn parse_level(s: &str) -> Result<LevelFilter, Error> {
     s.parse::<LevelFilter>()
-        .map_err(|_| anyhow!("failed to parse level '{}'", s))
+        .with_context(|| format!("failed to parse level '{}'", s))
 }
 
 #[derive(StructOpt)]
 #[structopt(name = "jobify")]
 struct Opts {
     /// Path to a configuration file
-    #[structopt(short = "c", long = "config", parse(from_os_str))]
+    #[structopt(short, long, parse(from_os_str))]
     config: Option<PathBuf>,
     /// The organization slug to watch
-    #[structopt(short = "o", long = "org")]
+    #[structopt(short, long)]
     org: Option<String>,
     /// The API token used for communicating with the Buildkite API, **must** have GraphQL enabled.
     /// If not specified, the value is taken from the configuration file,
     /// or the `BUILDKITE_API_TOKEN` environment variable
-    #[structopt(short = "t", long = "api-token")]
+    #[structopt(short = "t", long)]
     api_token: Option<String>,
     /// The namespace under which kubernetes jobs are created. Defaults to "buildkite".
-    #[structopt(short = "n", long = "namespace")]
+    #[structopt(short, long)]
     namespace: Option<String>,
+    /// Optional cluster identifier, if present, only jobs tagged with the same
+    /// cluster identifier will be scheduled by this instance
+    #[structopt(long)]
+    cluster: Option<String>,
     #[structopt(
         short = "L",
-        long = "log-level",
+        long,
         default_value = "info",
         parse(try_from_str = parse_level),
         long_help = "The log level for messages, only log messages at or above the level will be emitted.
@@ -156,10 +211,11 @@ async fn real_main() -> Result<(), Error> {
             api_token,
             cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()),
             cfg.pipeline_slugs,
+            args.cluster,
         ))
     };
 
-    let (org, token, namespace, pipelines) = match get_cfg() {
+    let (org, token, namespace, pipelines, cluster) = match get_cfg() {
         Ok(cfg) => cfg,
         Err(e) => {
             error!("{}", e);
@@ -171,7 +227,7 @@ async fn real_main() -> Result<(), Error> {
         let monitor = Monitor::with_org_slug(token.clone(), &org)
             .await
             .context("buildkite org monitor")?;
-        let jobifier = Jobifier::create(token, namespace).context("k8s jobifier")?;
+        let jobifier = Jobifier::create(token, namespace, cluster).context("k8s jobifier")?;
         let scheduler = Scheduler::new(monitor, jobifier);
 
         for pipeline in pipelines {

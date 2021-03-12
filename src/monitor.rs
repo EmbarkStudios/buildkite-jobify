@@ -1,3 +1,6 @@
+// Items generated the graphql schema trigger this lint, so just disable for this entire file
+#![allow(clippy::pub_enum_variant_names)]
+
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
 use serde::{de::DeserializeOwned, Serialize};
@@ -74,26 +77,24 @@ impl std::error::Error for BkErr {
 
 impl fmt::Display for BkErr {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        use BkErr::*;
-
         match self {
-            InvalidHttpHeader(ihv) => write!(f, "invalid header value: {}", ihv),
-            Http(re) => write!(f, "http error: {}", re),
-            Reqwest(re) => write!(f, "http request error: {}", re),
-            Json(je) => write!(f, "json error: {}", je),
-            UnknownOrg(o) => write!(f, "unknown org '{}'", o),
-            InvalidOrgId(o) => write!(f, "invalid org id '{}'", o),
-            UnknownPipeline(p) => write!(f, "unknown pipeline '{}'", p),
-            Threadpool(io) => write!(f, "threadpool error: {}", io),
-            Request(api) => write!(f, "API failure: {}", api),
-            InvalidResponse(res) => write!(f, "invalid response {}", res),
+            Self::InvalidHttpHeader(ihv) => write!(f, "invalid header value: {}", ihv),
+            Self::Http(re) => write!(f, "http error: {}", re),
+            Self::Reqwest(re) => write!(f, "http request error: {}", re),
+            Self::Json(je) => write!(f, "json error: {}", je),
+            Self::UnknownOrg(o) => write!(f, "unknown org '{}'", o),
+            Self::InvalidOrgId(o) => write!(f, "invalid org id '{}'", o),
+            Self::UnknownPipeline(p) => write!(f, "unknown pipeline '{}'", p),
+            Self::Threadpool(io) => write!(f, "threadpool error: {}", io),
+            Self::Request(api) => write!(f, "API failure: {}", api),
+            Self::InvalidResponse(res) => write!(f, "invalid response {}", res),
         }
     }
 }
 
 impl From<reqwest::Error> for BkErr {
     fn from(e: reqwest::Error) -> Self {
-        BkErr::Reqwest(e)
+        Self::Reqwest(e)
     }
 }
 
@@ -103,7 +104,7 @@ pub struct GraphQLErrors {
 }
 
 impl fmt::Display for GraphQLErrors {
-    fn fmt(&self, f: &mut fmt::Formatter) -> fmt::Result {
+    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         f.debug_list().entries(self.errors.iter()).finish()
     }
 }
@@ -212,7 +213,7 @@ impl From<get_builds::BuildStates> for BuildStates {
             BS::CANCELED => BuildStates::Canceled,
             BS::BLOCKED => BuildStates::Blocked,
             BS::NOT_RUN => BuildStates::NotRun,
-            _ => BuildStates::Unknown,
+            BS::Other(_) => BuildStates::Unknown,
         }
     }
 }
@@ -285,7 +286,7 @@ impl From<get_builds::JobStates> for JobStates {
             JS::TIMED_OUT => JobStates::TimedOut,
             JS::SKIPPED => JobStates::Skipped,
             JS::BROKEN => JobStates::Broken,
-            _ => JobStates::Unknown,
+            JS::Other(_) => JobStates::Unknown,
         }
     }
 }
@@ -635,7 +636,7 @@ async fn get_builds(
     });
 
     let (res_body, _hash) =
-        send_request::<_, get_running_builds::ResponseData>(&client, &req_body, None).await?;
+        send_request::<_, get_running_builds::ResponseData>(client, &req_body, None).await?;
 
     let builds_to_check = res_body
         .and_then(|root| root.node)
@@ -674,7 +675,7 @@ async fn get_builds(
     });
 
     let (res_body, hash) =
-        send_request::<_, get_builds::ResponseData>(&client, &req_body, *query_hash).await?;
+        send_request::<_, get_builds::ResponseData>(client, &req_body, *query_hash).await?;
 
     // Don't bother sending an update to jobifier if the Buildkite state hasn't changed
     if *query_hash == hash {

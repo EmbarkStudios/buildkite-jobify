@@ -1,4 +1,4 @@
-FROM rust:1.49.0 as build
+FROM rust:1.50.0 as build
 
 RUN set -eux; \
     apt-get update; \
