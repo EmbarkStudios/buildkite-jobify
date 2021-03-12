@@ -68,6 +68,8 @@ struct Config {
     namespace: Option<String>,
     /// The list of pipelines slugs within the organization to watch
     pipeline_slugs: Vec<String>,
+    /// Cluster filter, only agents specified with the same cluster will be spawned
+    cluster: Option<String>,
 }
 
 fn parse_level(s: &str) -> Result<LevelFilter, Error> {
@@ -164,6 +166,7 @@ async fn real_main() -> Result<(), Error> {
                 organization: None,
                 api_token: None,
                 namespace: None,
+                cluster: None,
                 pipeline_slugs: Vec::new(),
             },
         };
@@ -178,6 +181,10 @@ async fn real_main() -> Result<(), Error> {
 
         if let Some(ns) = args.namespace {
             cfg.namespace = Some(ns);
+        }
+
+        if let Some(cluster) = args.cluster {
+            cfg.cluster = Some(cluster);
         }
 
         if !args.pipelines.is_empty() {
@@ -211,7 +218,7 @@ async fn real_main() -> Result<(), Error> {
             api_token,
             cfg.namespace.unwrap_or_else(|| "buildkite".to_owned()),
             cfg.pipeline_slugs,
-            args.cluster,
+            cfg.cluster,
         ))
     };
 
