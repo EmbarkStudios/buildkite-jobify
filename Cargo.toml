@@ -17,18 +17,18 @@ bytes = "1.0"
 crossbeam = "0.8"
 flate2 = { version = "1.0", default-features = false, features = ["rust_backend"] }
 futures = "0.3"
-graphql_client = "0.9"
+graphql_client = "0.10"
 http = "0.2"
 lru_time_cache = "0.11"
 openssl = { version = "0.10", features = ["vendored"] }
-reqwest = { version = "0.11", default-features = false, features = ["json", "native-tls"] }
+reqwest = { version = "0.11", default-features = false, features = ["json", "native-tls-vendored"] }
 serde = { version = "1.0", features = ["derive"] }
 serde_json = "1.0"
 serde_yaml = "0.8"
 tar = "0.4"
 toml = "0.5"
 structopt = "0.3"
-tame-oauth = { version = "0.4", features = ["gcp"] }
+tame-oauth = { version = "0.6", features = ["gcp"] }
 tracing = "0.1"
 tracing-subscriber = "0.2"
 twox-hash = { version = "1.6", default-features = false }
@@ -39,5 +39,5 @@ version = "1.0"
 features = ["rt-multi-thread", "macros", "time"]
 
 [dependencies.k8s-openapi]
-version = "0.11"
-features = ["v1_17"]
+version = "0.13"
+features = ["v1_20"]
