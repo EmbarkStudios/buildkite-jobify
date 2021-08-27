@@ -23,7 +23,6 @@ exceptions = [
     { allow = ["ISC", "MIT", "OpenSSL"], name = "ring" },
     { allow = ["ISC"], name = "untrusted" },
     { allow = ["BSD-2-Clause", "MIT"], name = "crossbeam-queue" },
-    { allow = ["BSD-3-Clause"], name = "instant" },
 ]
 
 [[licenses.clarify]]
@@ -47,12 +46,8 @@ deny = [
 skip = [
     # clap uses an old version
     { name = "ansi_term", version = "=0.11.0" },
-
-    { name = "bytes", version = "=0.5.6" },
-    { name = "cfg-if", version = "=0.1.10" },
 ]
 skip-tree = [
-    { name = "pin-project", version = "=0.4.27" },
 ]
 
 [sources]

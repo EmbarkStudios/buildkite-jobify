@@ -1,5 +1,4 @@
-// Items generated the graphql schema trigger this lint, so just disable for this entire file
-#![allow(clippy::pub_enum_variant_names)]
+#![allow(clippy::enum_variant_names)]
 
 use graphql_client::{GraphQLQuery, Response};
 use reqwest::Client;
@@ -171,7 +170,7 @@ macro_rules! parse_uuid {
                 error!("failed to parse Buildkite UUID '{}': {}", $uuid_str, err);
                 return None;
             }
-        };
+        }
     };
 }
 
@@ -444,9 +443,9 @@ impl Monitor {
                 .await?;
 
         let pipeline = res_body
-            .and_then(|root| root.node.map(|rn| rn.on))
+            .and_then(|root| root.node)
             .and_then(|n| {
-                if let get_pipeline_by_id::GetPipelineByIdNodeOn::Pipeline(pipeline) = n {
+                if let get_pipeline_by_id::GetPipelineByIdNode::Pipeline(pipeline) = n {
                     Some(pipeline)
                 } else {
                     None
@@ -555,8 +554,8 @@ async fn get_builds(
 
     let builds_to_check = res_body
         .and_then(|root| root.node)
-        .and_then(|node| match node.on {
-            get_running_builds::GetRunningBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
+        .and_then(|node| match node {
+            get_running_builds::GetRunningBuildsNode::Pipeline(pipeline) => pipeline.builds,
             _ => None,
         })
         .and_then(|in_builds| in_builds.edges)
@@ -602,8 +601,8 @@ async fn get_builds(
     let builds = res_body
         .and_then(|root| {
             if let Some(node) = root.node {
-                match node.on {
-                    get_builds::GetBuildsNodeOn::Pipeline(pipeline) => pipeline.builds,
+                match node {
+                    get_builds::GetBuildsNode::Pipeline(pipeline) => pipeline.builds,
                     _ => None,
                 }
             } else {
@@ -695,7 +694,7 @@ async fn get_builds(
                 commit: b.commit.clone(),
             }),
             _ => None,
-        }))
+        }));
     }
 
     Ok(builds)

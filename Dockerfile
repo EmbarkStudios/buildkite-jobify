@@ -1,8 +1,15 @@
-FROM rust:1.50.0 as build
+FROM rust:1.54.0-slim-bullseye as build
 
 RUN set -eux; \
     apt-get update; \
-    apt-get install musl-tools -y; \
+    apt-get install -y \
+        # We target x86_64-unknown-linux-musl
+        musl-tools \
+        # We have to build openssl from source :(
+        perl \
+        # We have to build openssl from source :(
+        make \
+    ; \
     rustup target add x86_64-unknown-linux-musl;
 
 WORKDIR /usr/src
@@ -13,7 +20,9 @@ ADD ./src/ ./src/
 ADD ./buildkite/ ./buildkite/
 
 # Build our application.
-RUN cargo install --target x86_64-unknown-linux-musl --path . && strip /usr/local/cargo/bin/buildkite-jobify
+RUN set -eux; \
+    cargo install --target x86_64-unknown-linux-musl --path .; \
+    strip /usr/local/cargo/bin/buildkite-jobify
 
 FROM alpine:latest
 RUN apk --no-cache add ca-certificates

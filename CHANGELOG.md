@@ -7,6 +7,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
+### Changed
+- Updated dependencies
+
 ## [0.6.0] - 2021-03-12
 ### Changed
 - [PR#28](https://github.com/EmbarkStudios/buildkite-jobify/pull/28) changed up how pipelines are specified, instead of specifying a slug, the user must specify the unique GraphQL pipeline ID that can be found in the pipeline's settings page (or via the GraphQL API). This means that the there is also no longer a need to specify the organization since pipelines are no longer queried for.

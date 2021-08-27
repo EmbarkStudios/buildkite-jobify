@@ -6,7 +6,7 @@ mod utils;
 use anyhow::{Context, Error};
 use reqwest::{header, Certificate, Client, Identity, Response};
 use std::sync::Arc;
-use tame_oauth::gcp::{ServiceAccountAccess, ServiceAccountInfo, TokenOrRequest};
+use tame_oauth::gcp::{ServiceAccountInfo, ServiceAccountProvider, TokenOrRequest};
 
 use self::kube_config::KubeConfigLoader;
 
@@ -69,7 +69,7 @@ impl Configuration {
 
 pub(crate) enum AuthProvider {
     //Basic(header::HeaderValue),
-    Oauth2(Arc<ServiceAccountAccess>),
+    Oauth2(Arc<ServiceAccountProvider>),
 }
 
 impl AuthProvider {
@@ -81,7 +81,7 @@ impl AuthProvider {
     // }
 
     fn with_service_key(key: ServiceAccountInfo) -> Result<AuthProvider, Error> {
-        let access = ServiceAccountAccess::new(key)?;
+        let access = ServiceAccountProvider::new(key)?;
         Ok(AuthProvider::Oauth2(Arc::new(access)))
     }
 
@@ -89,6 +89,8 @@ impl AuthProvider {
         &'a self,
         client: &'a Client,
     ) -> Result<header::HeaderValue, Error> {
+        use tame_oauth::gcp::TokenProvider;
+
         match self {
             //AuthProvider::Basic(hv) => Ok(hv.clone()),
             AuthProvider::Oauth2(access) => {
@@ -134,7 +136,7 @@ impl AuthProvider {
 
                         access.parse_token_response(scope_hash, response)?
                     }
-                    _ => unreachable!(),
+                    TokenOrRequest::Token(_) => unreachable!(),
                 };
 
                 use std::convert::TryInto;
