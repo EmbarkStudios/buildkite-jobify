@@ -93,11 +93,8 @@ async fn get_jobify_config<'a>(
         anyhow::bail!("checksum mismatch");
     }
 
-    info!("acquiring jobify artifact {}", artifact_id);
-
     let res = client.get(&artifact.download_url).send().await?;
 
-    info!("deserializing jobify configuration");
     let res_body = res.bytes().await?;
 
     // Just assume gzipped tar for now
@@ -145,6 +142,10 @@ async fn get_jobify_config<'a>(
             a.kubernetes.as_ref().map(|k| (&a.name, k))
         }
     }) {
+        if specs.contains_key(path.as_path()) {
+            continue;
+        }
+
         match files.get(path) {
             Some(cfg) => {
                 let spec: batch::Job = serde_yaml::from_str(cfg).map_err(|e| {
@@ -155,7 +156,7 @@ async fn get_jobify_config<'a>(
                     )
                 })?;
 
-                specs.insert(path.to_owned(), spec);
+                specs.insert(path.clone(), spec);
             }
             None => warn!(
                 "agent {} points to missing k8s config {}",
@@ -201,7 +202,7 @@ async fn spawn_job<'a>(
         // Setup naming/labeling
         {
             if job_spec.template.metadata.is_none() {
-                job_spec.template.metadata = Some(Default::default())
+                job_spec.template.metadata = Some(Default::default());
             }
 
             if let Some(ref mut md) = job_spec.template.metadata {
@@ -386,13 +387,14 @@ fn get_best_agent<'a>(
             job.label
         )
     })?;
+
     let spec = cfg.k8s_specs.get(spec_path).ok_or_else(|| {
         anyhow::anyhow!(
             "agent {} points to missing spec {}, can't assign job {}({})",
             agent.name,
             spec_path.display(),
             job.uuid,
-            job.label
+            job.label,
         )
     })?;
 
@@ -515,7 +517,7 @@ async fn jobify(
                             }
                         };
 
-                        configs.insert(chksum.to_owned(), val);
+                        configs.insert(chksum.clone(), val);
                     }
                 }
             }
