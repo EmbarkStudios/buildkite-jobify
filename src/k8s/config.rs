@@ -73,13 +73,6 @@ pub(crate) enum AuthProvider {
 }
 
 impl AuthProvider {
-    // fn with_username_password(username: &str, password: &str) -> Result<AuthProvider, Error> {
-    //     let encoded = base64::encode(&format!("{}:{}", username, password));
-    //     let hv = header::HeaderValue::from_str(&format!("Basic {}", encoded))?;
-
-    //     Ok(AuthProvider::Basic(hv))
-    // }
-
     fn with_service_key(key: ServiceAccountInfo) -> Result<AuthProvider, Error> {
         let access = ServiceAccountProvider::new(key)?;
         Ok(AuthProvider::Oauth2(Arc::new(access)))
@@ -139,7 +132,6 @@ impl AuthProvider {
                     TokenOrRequest::Token(_) => unreachable!(),
                 };
 
-                use std::convert::TryInto;
                 Ok(token.try_into()?)
             }
         }

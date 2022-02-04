@@ -5,6 +5,7 @@ use std::{fmt, sync::Arc};
 use super::config::Configuration;
 
 #[derive(Deserialize, Debug)]
+#[allow(dead_code)]
 pub struct ApiError {
     status: String,
     #[serde(default)]
