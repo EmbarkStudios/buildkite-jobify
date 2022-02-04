@@ -1,3 +1,5 @@
+<!-- markdownlint-disable blanks-around-headings blanks-around-lists no-duplicate-heading -->
+
 # Changelog
 
 All notable changes to this project will be documented in this file.
@@ -7,6 +9,9 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
+### Changed
+- Updated dependencies
+
 ## [0.6.1] - 2021-08-27
 ### Changed
 - Updated dependencies

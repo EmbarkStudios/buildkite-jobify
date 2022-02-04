@@ -1,4 +1,6 @@
-# 👷 buildkite-jobify
+<div align="center">
+
+# `👷 buildkite-jobify`
 
 [![Embark](https://img.shields.io/badge/embark-open%20source-blueviolet.svg)](https://embark.dev)
 [![Embark](https://img.shields.io/badge/discord-ark-%237289da.svg?logo=discord)](https://discord.gg/dAuKfZS)
@@ -7,6 +9,8 @@
 
 Watches 1 or more Buildkite pipelines via the GraphQL API to kick off temporary Kubernetes jobs that (presumably)
 spin up Buildkite agents to pick up the Buildkite jobs that Buildkite has scheduled but not yet found an agent for.
+
+</div>
 
 ## Repository Setup
 
@@ -58,7 +62,7 @@ buildkite-agent pipeline upload "$(dirname "$0")/pipeline.yml"
 
 ## Contributing
 
-[![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](../CODE_OF_CONDUCT.md)
+[![Contributor Covenant](https://img.shields.io/badge/contributor%20covenant-v1.4-ff69b4.svg)](CODE_OF_CONDUCT.md)
 
 We welcome community contributions to this project.
 
@@ -68,8 +72,8 @@ Please read our [Contributor Guide](CONTRIBUTING.md) for more information on how
 
 Licensed under either of
 
-* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or http://www.apache.org/licenses/LICENSE-2.0)
-* MIT license ([LICENSE-MIT](LICENSE-MIT) or http://opensource.org/licenses/MIT)
+* Apache License, Version 2.0, ([LICENSE-APACHE](LICENSE-APACHE) or <http://www.apache.org/licenses/LICENSE-2.0>)
+* MIT license ([LICENSE-MIT](LICENSE-MIT) or <http://opensource.org/licenses/MIT>)
 
 at your option.
 
