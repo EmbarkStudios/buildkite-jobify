@@ -1,4 +1,4 @@
-FROM rust:1.58.1-slim-bullseye as build
+FROM rust:1.63.0-slim-bullseye as build
 
 RUN set -eux; \
     apt-get update; \
