@@ -174,10 +174,12 @@ macro_rules! parse_uuid {
     };
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum BuildStates {
     /// The build was skipped
     Skipped,
+    /// The build is currently being created
+    Creating,
     /// The build has yet to start running jobs
     Scheduled,
     /// The build is currently running jobs
@@ -186,6 +188,8 @@ pub enum BuildStates {
     Passed,
     /// The build failed
     Failed,
+    /// The build is failing
+    Failing,
     /// The build is currently being canceled
     Canceling,
     /// The build was canceled
@@ -203,21 +207,23 @@ impl From<get_builds::BuildStates> for BuildStates {
         use get_builds::BuildStates as BS;
 
         match bs {
-            BS::SKIPPED => BuildStates::Skipped,
-            BS::SCHEDULED => BuildStates::Scheduled,
-            BS::RUNNING => BuildStates::Running,
-            BS::PASSED => BuildStates::Passed,
-            BS::FAILED => BuildStates::Failed,
-            BS::CANCELING => BuildStates::Canceling,
-            BS::CANCELED => BuildStates::Canceled,
-            BS::BLOCKED => BuildStates::Blocked,
-            BS::NOT_RUN => BuildStates::NotRun,
-            BS::Other(_) => BuildStates::Unknown,
+            BS::SKIPPED => Self::Skipped,
+            BS::CREATING => Self::Creating,
+            BS::SCHEDULED => Self::Scheduled,
+            BS::RUNNING => Self::Running,
+            BS::PASSED => Self::Passed,
+            BS::FAILED => Self::Failed,
+            BS::FAILING => Self::Failing,
+            BS::CANCELING => Self::Canceling,
+            BS::CANCELED => Self::Canceled,
+            BS::BLOCKED => Self::Blocked,
+            BS::NOT_RUN => Self::NotRun,
+            BS::Other(_) => Self::Unknown,
         }
     }
 }
 
-#[derive(Debug, PartialEq)]
+#[derive(Debug, PartialEq, Eq)]
 pub enum JobStates {
     /// The job has just been created and doesn't have a state yet
     Pending,
@@ -233,6 +239,8 @@ pub enum JobStates {
     Unblocked,
     /// This `block` job was in a `Blocked` state when the build failed
     UnblockedFailed,
+    /// The job is waiting on a concurrency group check before becoming either `LIMITED` or `SCHEDULED`
+    Limiting,
     /// The job is waiting for jobs with the same concurrency group to finish
     Limited,
     /// The job is scheduled and waiting for an agent
@@ -257,6 +265,8 @@ pub enum JobStates {
     Skipped,
     /// The jobs configuration means that it can't be run
     Broken,
+    /// The job expired before it was started on an agent
+    Expired,
     /// An unknown job state
     Unknown,
 }
@@ -266,26 +276,28 @@ impl From<get_builds::JobStates> for JobStates {
         use get_builds::JobStates as JS;
 
         match js {
-            JS::PENDING => JobStates::Pending,
-            JS::WAITING => JobStates::Waiting,
-            JS::WAITING_FAILED => JobStates::WaitingFailed,
-            JS::BLOCKED => JobStates::Blocked,
-            JS::BLOCKED_FAILED => JobStates::BlockedFailed,
-            JS::UNBLOCKED => JobStates::Unblocked,
-            JS::UNBLOCKED_FAILED => JobStates::UnblockedFailed,
-            JS::LIMITED => JobStates::Limited,
-            JS::SCHEDULED => JobStates::Scheduled,
-            JS::ASSIGNED => JobStates::Assigned,
-            JS::ACCEPTED => JobStates::Accepted,
-            JS::RUNNING => JobStates::Running,
-            JS::FINISHED => JobStates::Finished,
-            JS::CANCELING => JobStates::Canceling,
-            JS::CANCELED => JobStates::Canceled,
-            JS::TIMING_OUT => JobStates::TimingOut,
-            JS::TIMED_OUT => JobStates::TimedOut,
-            JS::SKIPPED => JobStates::Skipped,
-            JS::BROKEN => JobStates::Broken,
-            JS::Other(_) => JobStates::Unknown,
+            JS::PENDING => Self::Pending,
+            JS::WAITING => Self::Waiting,
+            JS::WAITING_FAILED => Self::WaitingFailed,
+            JS::BLOCKED => Self::Blocked,
+            JS::BLOCKED_FAILED => Self::BlockedFailed,
+            JS::UNBLOCKED => Self::Unblocked,
+            JS::UNBLOCKED_FAILED => Self::UnblockedFailed,
+            JS::LIMITING => Self::Limiting,
+            JS::LIMITED => Self::Limited,
+            JS::SCHEDULED => Self::Scheduled,
+            JS::ASSIGNED => Self::Assigned,
+            JS::ACCEPTED => Self::Accepted,
+            JS::RUNNING => Self::Running,
+            JS::FINISHED => Self::Finished,
+            JS::CANCELING => Self::Canceling,
+            JS::CANCELED => Self::Canceled,
+            JS::TIMING_OUT => Self::TimingOut,
+            JS::TIMED_OUT => Self::TimedOut,
+            JS::SKIPPED => Self::Skipped,
+            JS::BROKEN => Self::Broken,
+            JS::EXPIRED => Self::Expired,
+            JS::Other(_) => Self::Unknown,
         }
     }
 }
@@ -631,7 +643,7 @@ async fn get_builds(
                                                 state: cmd.state.into(),
                                                 query_rules: cmd.agent_query_rules.as_ref().map(|v| v.join(",")).unwrap_or_default(),
                                                 exit_status: cmd.exit_status.and_then(|es| es.parse::<i32>().ok()),
-                                                agent: cmd.agent.and_then(|a| a.name),
+                                                agent: cmd.agent.map(|a| a.name),
                                             })
                                         }
                                         _ => None
