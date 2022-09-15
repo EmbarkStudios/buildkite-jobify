@@ -314,7 +314,7 @@ async fn spawn_job<'a>(
     }
 
     // Construct the job creation request
-    let (req, _) = batch::Job::create_namespaced_job(namespace, &k8_job, Default::default())
+    let (req, _) = batch::Job::create(namespace, &k8_job, Default::default())
         .context("create_namespaced_job")?;
 
     // Make the request TODO: handle errors...
@@ -407,7 +407,7 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
     let label_selector = format!("bk-jobify=true,bk-pipeline={}", pipeline);
 
     // TODO: Use watches
-    let (req, _) = core::Pod::list_namespaced_pod(
+    let (req, _) = core::Pod::list(
         &namespace,
         ListOptional {
             label_selector: Some(&label_selector),
@@ -433,7 +433,7 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
                         .as_ref()
                         .and_then(|labels| labels.get("job-name"))
                     {
-                        let (req, _) = match batch::Job::delete_namespaced_job(
+                        let (req, _) = match batch::Job::delete(
                             agent_name,
                             &namespace,
                             k8s_openapi::DeleteOptional {
