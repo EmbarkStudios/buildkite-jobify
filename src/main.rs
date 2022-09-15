@@ -1,80 +1,8 @@
-// BEGIN - Embark standard lints v0.4
-// do not change or add/remove here, but one can add exceptions after this section
-// for more info see: <https://github.com/EmbarkStudios/rust-ecosystem/issues/59>
-#![deny(unsafe_code)]
-#![warn(
-    clippy::all,
-    clippy::await_holding_lock,
-    clippy::char_lit_as_u8,
-    clippy::checked_conversions,
-    clippy::dbg_macro,
-    clippy::debug_assert_with_mut_call,
-    clippy::doc_markdown,
-    clippy::empty_enum,
-    clippy::enum_glob_use,
-    clippy::exit,
-    clippy::expl_impl_clone_on_copy,
-    clippy::explicit_deref_methods,
-    clippy::explicit_into_iter_loop,
-    clippy::fallible_impl_from,
-    clippy::filter_map_next,
-    clippy::float_cmp_const,
-    clippy::fn_params_excessive_bools,
-    clippy::if_let_mutex,
-    clippy::implicit_clone,
-    clippy::imprecise_flops,
-    clippy::inefficient_to_string,
-    clippy::invalid_upcast_comparisons,
-    clippy::large_types_passed_by_value,
-    clippy::let_unit_value,
-    clippy::linkedlist,
-    clippy::lossy_float_literal,
-    clippy::macro_use_imports,
-    clippy::manual_ok_or,
-    clippy::map_err_ignore,
-    clippy::map_flatten,
-    clippy::map_unwrap_or,
-    clippy::match_on_vec_items,
-    clippy::match_same_arms,
-    clippy::match_wildcard_for_single_variants,
-    clippy::mem_forget,
-    clippy::mismatched_target_os,
-    clippy::mut_mut,
-    clippy::mutex_integer,
-    clippy::needless_borrow,
-    clippy::needless_continue,
-    clippy::option_option,
-    clippy::path_buf_push_overwrite,
-    clippy::ptr_as_ptr,
-    clippy::ref_option_ref,
-    clippy::rest_pat_in_fully_bound_structs,
-    clippy::same_functions_in_if_condition,
-    clippy::semicolon_if_nothing_returned,
-    clippy::string_add_assign,
-    clippy::string_add,
-    clippy::string_lit_as_bytes,
-    clippy::string_to_string,
-    clippy::todo,
-    clippy::trait_duplication_in_bounds,
-    clippy::unimplemented,
-    clippy::unnested_or_patterns,
-    clippy::unused_self,
-    clippy::useless_transmute,
-    clippy::verbose_file_reads,
-    clippy::zero_sized_map_values,
-    future_incompatible,
-    nonstandard_style,
-    rust_2018_idioms
-)]
-// END - Embark standard lints v0.4
-#![allow(clippy::exit)]
-
-use anyhow::{anyhow, bail, Context, Error};
+use anyhow::{anyhow, bail, Context as _, Error};
 use buildkite_jobify::{jobifier::Jobifier, monitor::Monitor, scheduler::Scheduler};
+use camino::Utf8PathBuf as PathBuf;
+use clap::Parser;
 use serde::Deserialize;
-use std::path::PathBuf;
-use structopt::StructOpt;
-use tracing::error;
 use tracing_subscriber::filter::LevelFilter;
 
 #[derive(Deserialize)]
@@ -95,29 +23,29 @@ fn parse_level(s: &str) -> Result<LevelFilter, Error> {
         .with_context(|| format!("failed to parse level '{}'", s))
 }
 
-#[derive(StructOpt)]
-#[structopt(name = "jobify")]
+#[derive(Parser)]
+#[clap(name = "jobify")]
 struct Opts {
     /// Path to a configuration file
-    #[structopt(short, long, parse(from_os_str))]
+    #[clap(short, long, action)]
     config: Option<PathBuf>,
     /// The API token used for communicating with the Buildkite API, **must** have GraphQL enabled.
     /// If not specified, the value is taken from the configuration file,
     /// or the `BUILDKITE_API_TOKEN` environment variable
-    #[structopt(short = "t", long)]
+    #[clap(short = 't', long, action)]
     api_token: Option<String>,
     /// The namespace under which kubernetes jobs are created. Defaults to "buildkite".
-    #[structopt(short, long)]
+    #[clap(short, long, action)]
     namespace: Option<String>,
     /// Optional cluster identifier, if present, only jobs tagged with the same
     /// cluster identifier will be scheduled by this instance
-    #[structopt(long)]
+    #[clap(long, action)]
     cluster: Option<String>,
     #[structopt(
-        short = "L",
+        short = 'L',
         long,
         default_value = "info",
-        parse(try_from_str = parse_level),
+        value_parser = parse_level,
         long_help = "The log level for messages, only log messages at or above the level will be emitted.
 
 Possible values:
@@ -130,20 +58,17 @@ Possible values:
     )]
     log_level: LevelFilter,
     /// Output log messages as json
-    #[structopt(long)]
+    #[clap(long, action)]
     json: bool,
     /// The pipeline identifiers to watch for builds
-    #[structopt(name = "PIPELINE")]
+    #[clap(name = "PIPELINE", action)]
     pipelines: Vec<String>,
 }
 
 async fn real_main() -> Result<(), Error> {
-    let args = Opts::from_args();
+    let args = Opts::parse();
 
     let mut env_filter = tracing_subscriber::EnvFilter::from_default_env();
-
-    // If a user specifies a log level, we assume it only pertains to cargo_fetcher,
-    // if they want to trace other crates they can use the RUST_LOG env approach
     env_filter = env_filter.add_directive(args.log_level.into());
 
     let subscriber = tracing_subscriber::FmtSubscriber::builder().with_env_filter(env_filter);
@@ -161,21 +86,11 @@ async fn real_main() -> Result<(), Error> {
     let get_cfg = || {
         let mut cfg: Config = match args.config {
             Some(ref path) => {
-                let contents = std::fs::read_to_string(&path).map_err(|e| {
-                    anyhow!(
-                        "failed to read configuration from {}: {}",
-                        path.display(),
-                        e
-                    )
-                })?;
+                let contents = std::fs::read_to_string(&path)
+                    .map_err(|e| anyhow!("failed to read configuration from {path}: {e}"))?;
 
-                toml::from_str(&contents).map_err(|e| {
-                    anyhow!(
-                        "failed to deserialize configuration from {}: {}",
-                        path.display(),
-                        e
-                    )
-                })?
+                toml::from_str(&contents)
+                    .map_err(|e| anyhow!("failed to deserialize configuration from {path}: {e}"))?
             }
             None => Config {
                 api_token: None,
@@ -227,13 +142,7 @@ async fn real_main() -> Result<(), Error> {
         ))
     };
 
-    let (token, namespace, pipelines, cluster) = match get_cfg() {
-        Ok(cfg) => cfg,
-        Err(e) => {
-            error!("{}", e);
-            std::process::exit(1);
-        }
-    };
+    let (token, namespace, pipelines, cluster) = get_cfg()?;
 
     tracing::info!("namespace: {} cluster: {:?}", namespace, cluster);
 
@@ -252,14 +161,7 @@ async fn real_main() -> Result<(), Error> {
     }
     .await;
 
-    let scheduler = match start {
-        Ok(s) => s,
-        Err(e) => {
-            error!("{:#}", e);
-            std::process::exit(1);
-        }
-    };
-
+    let scheduler = start?;
     scheduler.wait().await;
     Ok(())
 }
@@ -270,6 +172,7 @@ async fn main() {
         Ok(_) => {}
         Err(e) => {
             tracing::error!("{:#}", e);
+            #[allow(clippy::exit)]
             std::process::exit(1);
         }
     }
