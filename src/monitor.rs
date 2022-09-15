@@ -10,22 +10,6 @@ use uuid::Uuid;
 #[derive(GraphQLQuery)]
 #[graphql(
     schema_path = "buildkite/schema.json",
-    query_path = "buildkite/org.gql",
-    response_derives = "Debug"
-)]
-struct OrgId;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "buildkite/schema.json",
-    query_path = "buildkite/org.gql",
-    response_derives = "Debug"
-)]
-struct OrgAccess;
-
-#[derive(GraphQLQuery)]
-#[graphql(
-    schema_path = "buildkite/schema.json",
     query_path = "buildkite/jobs.gql",
     response_derives = "Debug"
 )]
