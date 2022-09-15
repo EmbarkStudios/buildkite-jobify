@@ -12,7 +12,7 @@ use std::{
     collections::{BTreeMap, HashMap, HashSet},
     path::{Path, PathBuf},
 };
-use tracing::{error, info, warn};
+use tracing::{debug, error, info, warn};
 use uuid::Uuid;
 
 #[derive(GraphQLQuery)]
@@ -314,7 +314,7 @@ async fn spawn_job<'a>(
     }
 
     // Construct the job creation request
-    let (req, _) = batch::Job::create_namespaced_job(namespace, &k8_job, Default::default())
+    let (req, _) = batch::Job::create(namespace, &k8_job, Default::default())
         .context("create_namespaced_job")?;
 
     // Make the request TODO: handle errors...
@@ -329,9 +329,7 @@ async fn spawn_job<'a>(
 fn get_best_agent<'a>(
     cfg: &'a Config,
     job: &monitor::Job,
-) -> Result<(&'a Agent, &'a batch::Job), Error> {
-    info!("attempting to find agent for {}({})", job.uuid, job.label);
-
+) -> Result<Option<(&'a Agent, &'a batch::Job)>, Error> {
     // Find a spec that matches the job
     let mut best = None;
     let mut score: u32 = 0;
@@ -371,13 +369,10 @@ fn get_best_agent<'a>(
         }
     }
 
-    let agent = best.ok_or_else(|| {
-        anyhow::anyhow!(
-            "no suitable agent could be found for job {}({})",
-            job.uuid,
-            job.label
-        )
-    })?;
+    let agent = match best {
+        Some(agent) => agent,
+        None => return Ok(None),
+    };
 
     let spec_path = agent.kubernetes.as_ref().ok_or_else(|| {
         anyhow::anyhow!(
@@ -398,7 +393,7 @@ fn get_best_agent<'a>(
         )
     })?;
 
-    Ok((agent, spec))
+    Ok(Some((agent, spec)))
 }
 
 async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> Result<u32, Error> {
@@ -407,7 +402,7 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
     let label_selector = format!("bk-jobify=true,bk-pipeline={}", pipeline);
 
     // TODO: Use watches
-    let (req, _) = core::Pod::list_namespaced_pod(
+    let (req, _) = core::Pod::list(
         &namespace,
         ListOptional {
             label_selector: Some(&label_selector),
@@ -426,14 +421,18 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
     for pod in pods.items {
         if let Some(statuses) = pod.status.and_then(|s| s.container_statuses) {
             for status in statuses {
-                if status.state.and_then(|s| s.terminated).is_some() {
+                if let Some(terminated) = status.state.and_then(|s| s.terminated) {
+                    if terminated.exit_code != 0 {
+                        warn!("{terminated:#?}");
+                    }
+
                     if let Some(agent_name) = pod
                         .metadata
                         .labels
                         .as_ref()
                         .and_then(|labels| labels.get("job-name"))
                     {
-                        let (req, _) = match batch::Job::delete_namespaced_job(
+                        let (req, _) = match batch::Job::delete(
                             agent_name,
                             &namespace,
                             k8s_openapi::DeleteOptional {
@@ -450,11 +449,11 @@ async fn cleanup_jobs(kbctl: APIClient, namespace: String, pipeline: String) -> 
 
                         match kbctl.request::<batch::Job>(req).await {
                             Ok(_) => {
-                                info!("deleted agent {}", agent_name);
+                                debug!("deleted agent {agent_name}");
                                 deleted += 1;
                             }
                             Err(e) => {
-                                error!("failed to delete agent {}: {}", agent_name, e);
+                                error!("failed to delete agent {agent_name}: {e}");
                             }
                         }
                     }
@@ -536,7 +535,7 @@ async fn jobify(
 
                     match configs.get(chksum).and_then(|cfg| cfg.as_ref()) {
                         Some(cfg) => match get_best_agent(cfg, job) {
-                            Ok((agent, spec)) => {
+                            Ok(Some((agent, spec))) => {
                                 let job_info = JobInfo {
                                     bk_job: job,
                                     pipeline: &builds.pipeline,
@@ -545,10 +544,7 @@ async fn jobify(
 
                                 match spawn_job(&kbctl, &job_info, spec, &namespace).await {
                                     Ok((name, _k8_job_status)) => {
-                                        info!(
-                                            "spawned job {} for {}({})",
-                                            name, job.label, job.uuid,
-                                        );
+                                        info!("spawned job {name} for {}({})", job.label, job.uuid,);
 
                                         known_jobs.insert(job.uuid, None);
                                         pending_agents.insert(name);
@@ -561,8 +557,9 @@ async fn jobify(
                                     }
                                 }
                             }
+                            Ok(None) => {}
                             Err(e) => {
-                                warn!("{}", e);
+                                warn!("{e}");
                             }
                         },
                         None => {
@@ -587,7 +584,7 @@ async fn jobify(
                 let agent = agent.clone();
                 if pending_agents.remove(&agent) {
                     if let Some(v) = known_jobs.get_mut(&job_id) {
-                        info!("job {} running on agent {}", job_id, agent);
+                        info!("job {job_id} running on agent {agent}");
                         *v = Some(agent);
                     }
                 }
@@ -623,10 +620,12 @@ async fn jobify(
             let cleanup = async move {
                 match cleanup_jobs(client, ns, pipeline).await {
                     Ok(da) => {
-                        info!("cleaned up {} kubernetes agents", da);
+                        if da > 0 {
+                            debug!("cleaned up {da} kubernetes agents");
+                        }
                     }
                     Err(e) => {
-                        error!("failed during kubernetes job cleanup: {}", e);
+                        error!("failed during kubernetes job cleanup: {e}");
                     }
                 }
             };

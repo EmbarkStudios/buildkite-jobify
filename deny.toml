@@ -5,9 +5,7 @@ unmaintained = "deny"
 yanked = "deny"
 unsound = "allow"
 ignore = [
-    "RUSTSEC-2020-0036",
-    # chrono ugh
-    "RUSTSEC-2020-0159",
+    "RUSTSEC-2021-0139",
 ]
 
 [licenses]
@@ -18,12 +16,12 @@ copyleft = "deny"
 exceptions = [
     { allow = [
         "ISC",
-        "MIT",
         "OpenSSL",
     ], name = "ring" },
     { allow = [
         "ISC",
     ], name = "untrusted" },
+    { allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
 ]
 
 [[licenses.clarify]]
@@ -47,8 +45,6 @@ license-files = [{ path = "COPYRIGHT", hash = 0x39f8ad31 }]
 multiple-versions = "deny"
 deny = []
 skip = [
-    # hyper depends on multiple versions
-    { name = "itoa", version = "=0.4.8" },
 ]
 skip-tree = []
 

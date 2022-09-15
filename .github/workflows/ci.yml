@@ -10,13 +10,10 @@ name: CI
 jobs:
   lint:
     name: Lint
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
 
       # make sure all code has been formatted with rustfmt
       - run: rustup component add rustfmt clippy
@@ -32,14 +29,11 @@ jobs:
     name: Test
     strategy:
       matrix:
-        os: [ubuntu-20.04]
+        os: [ubuntu-22.04]
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo fetch
       - name: cargo test build
         run: cargo build --tests
@@ -47,20 +41,17 @@ jobs:
 
   deny-check:
     name: cargo-deny check
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
+      - uses: actions/checkout@v3
       - uses: EmbarkStudios/cargo-deny-action@v1
 
   publish-check:
     name: Publish Check
-    runs-on: ubuntu-20.04
+    runs-on: ubuntu-22.04
     steps:
-      - uses: actions/checkout@v2
-      - uses: actions-rs/toolchain@v1
-        with:
-          toolchain: stable
-          override: true
+      - uses: actions/checkout@v3
+      - uses: dtolnay/rust-toolchain@stable
       - run: cargo fetch
       - name: cargo publish
         run: cargo publish --dry-run --all-features
@@ -71,7 +62,7 @@ jobs:
     if: startsWith(github.ref, 'refs/tags/')
     strategy:
       matrix:
-        os: [ubuntu-20.04, macOS-latest, windows-latest]
+        os: [ubuntu-22.04, macOS-latest, windows-latest]
         include:
           - os: ubuntu-latest
             rust: stable
