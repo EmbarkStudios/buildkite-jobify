@@ -9,6 +9,12 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 
 <!-- next-header -->
 ## [Unreleased] - ReleaseDate
+### Fixed
+- [PR#33](https://github.com/EmbarkStudios/buildkite-jobify/pull/33) fixed a bug due the addition of the `FAILING` state in the Buildkite GraphQL API. This new state was not used in the queries to find currently running builds, which would mean that a job that had not yet been scheduled in a build that transitioned to the `FAILING` state due to another job become failed would mean an agent would never get assigned to the job, causing the build to hang permanently until canceled.
+
+### Changed
+- [PR#33](https://github.com/EmbarkStudios/buildkite-jobify/pull/33) updated dependencies and cleaned up some output logging and other janitorial tasks.
+
 ## [0.6.2] - 2022-02-04
 ### Changed
 - Updated dependencies
