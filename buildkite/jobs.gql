@@ -15,14 +15,13 @@ query GetPipelineById($id: ID!) {
   }
 }
 
-# Get all of the currently running builds and the commits
-# they are running on, as a faster way to get all of the builds
-# we are interested in
+# Get all of the currently running builds and the commits they are running on,
+# as a faster way to get all of the builds we are interested in
 query GetRunningBuilds($id: ID!) {
   node(id: $id) {
   __typename
       ... on Pipeline {
-      builds(first: 100, state: [RUNNING]) {
+      builds(first: 100, state: [RUNNING, FAILING]) {
         count
         edges {
           node {
@@ -43,7 +42,7 @@ query GetBuilds($id: ID!, $commits: [String!]) {
   node(id: $id) {
   __typename
       ... on Pipeline {
-      builds(first: 100, commit: $commits, state: [RUNNING, FAILED]) {
+      builds(first: 100, commit: $commits, state: [RUNNING, FAILING, FAILED]) {
         count
         edges {
           node {
