@@ -24,7 +24,12 @@ pub fn data_or_file_with_base64<P: AsRef<Path>>(
     file: &Option<P>,
 ) -> Result<Vec<u8>, Error> {
     match (data, file) {
-        (Some(d), _) => base64::decode(&d).map_err(Error::from),
+        (Some(d), _) => {
+            use base64::Engine;
+            base64::engine::general_purpose::STANDARD
+                .decode(d)
+                .map_err(Error::from)
+        }
         (_, Some(f)) => Ok(std::fs::read(f)?),
         _ => anyhow::bail!("Failed to get data/file with base64 format"),
     }

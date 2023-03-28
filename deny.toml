@@ -4,9 +4,7 @@ targets = [{ triple = "x86_64-unknown-linux-musl" }]
 unmaintained = "deny"
 yanked = "deny"
 unsound = "allow"
-ignore = [
-    "RUSTSEC-2021-0139",
-]
+ignore = []
 
 [licenses]
 # The lint level for crates which do not have a detectable license
@@ -21,7 +19,9 @@ exceptions = [
     { allow = [
         "ISC",
     ], name = "untrusted" },
-    { allow = ["Unicode-DFS-2016"], name = "unicode-ident" },
+    { allow = [
+        "Unicode-DFS-2016",
+    ], name = "unicode-ident" },
 ]
 
 [[licenses.clarify]]
@@ -45,6 +45,11 @@ license-files = [{ path = "COPYRIGHT", hash = 0x39f8ad31 }]
 multiple-versions = "deny"
 deny = []
 skip = [
+    # ugh
+    { name = "base64", version = "0.13.1" },
+    { name = "base64", version = "0.20.0" },
+    # Used by a ton of crates still
+    { name = "syn", version = "1.0" },
 ]
 skip-tree = []
 
