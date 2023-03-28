@@ -146,23 +146,22 @@ async fn get_jobify_config<'a>(
             continue;
         }
 
-        match files.get(path) {
-            Some(cfg) => {
-                let spec: batch::Job = serde_yaml::from_str(cfg).map_err(|e| {
-                    anyhow::anyhow!(
-                        "failed to deserialize job spec for in {}: {}",
-                        path.display(),
-                        e
-                    )
-                })?;
+        if let Some(cfg) = files.get(path) {
+            let spec: batch::Job = serde_yaml::from_str(cfg).map_err(|e| {
+                anyhow::anyhow!(
+                    "failed to deserialize job spec for in {}: {}",
+                    path.display(),
+                    e
+                )
+            })?;
 
-                specs.insert(path.clone(), spec);
-            }
-            None => warn!(
+            specs.insert(path.clone(), spec);
+        } else {
+            warn!(
                 "agent {} points to missing k8s config {}",
                 name,
                 path.display()
-            ),
+            );
         }
     }
 
@@ -239,18 +238,19 @@ async fn spawn_job<'a>(
                     }
 
                     if let Some(env) = container.env.as_mut() {
-                        let tags = match env.iter().position(|e| e.name == "BUILDKITE_AGENT_TAGS") {
-                            Some(i) => &mut env[i],
-                            None => {
-                                env.push(core::EnvVar {
-                                    name: "BUILDKITE_AGENT_TAGS".to_owned(),
-                                    value: None,
-                                    value_from: None,
-                                });
+                        let tags = if let Some(i) =
+                            env.iter().position(|e| e.name == "BUILDKITE_AGENT_TAGS")
+                        {
+                            &mut env[i]
+                        } else {
+                            env.push(core::EnvVar {
+                                name: "BUILDKITE_AGENT_TAGS".to_owned(),
+                                value: None,
+                                value_from: None,
+                            });
 
-                                let i = env.len() - 1;
-                                &mut env[i]
-                            }
+                            let i = env.len() - 1;
+                            &mut env[i]
                         };
 
                         // Make a single value for the env var, eg "somekey=somevalue,otherkey=othervalue"
@@ -258,20 +258,20 @@ async fn spawn_job<'a>(
 
                         // Make the agent name the same as the k8s Job name, so that we can pair
                         // the job to it correctly
-                        let agent_name_var =
-                            match env.iter().position(|e| e.name == "BUILDKITE_AGENT_NAME") {
-                                Some(i) => &mut env[i],
-                                None => {
-                                    env.push(core::EnvVar {
-                                        name: "BUILDKITE_AGENT_NAME".to_owned(),
-                                        value: None,
-                                        value_from: None,
-                                    });
+                        let agent_name_var = if let Some(i) =
+                            env.iter().position(|e| e.name == "BUILDKITE_AGENT_NAME")
+                        {
+                            &mut env[i]
+                        } else {
+                            env.push(core::EnvVar {
+                                name: "BUILDKITE_AGENT_NAME".to_owned(),
+                                value: None,
+                                value_from: None,
+                            });
 
-                                    let i = env.len() - 1;
-                                    &mut env[i]
-                                }
-                            };
+                            let i = env.len() - 1;
+                            &mut env[i]
+                        };
 
                         agent_name_var.value = Some(agent_name.clone());
                     }

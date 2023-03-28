@@ -86,7 +86,7 @@ async fn real_main() -> Result<(), Error> {
     let get_cfg = || {
         let mut cfg: Config = match args.config {
             Some(ref path) => {
-                let contents = std::fs::read_to_string(&path)
+                let contents = std::fs::read_to_string(path)
                     .map_err(|e| anyhow!("failed to read configuration from {path}: {e}"))?;
 
                 toml::from_str(&contents)
@@ -171,7 +171,7 @@ async fn main() {
     match real_main().await {
         Ok(_) => {}
         Err(e) => {
-            tracing::error!("{:#}", e);
+            tracing::error!("{e:#}");
             #[allow(clippy::exit)]
             std::process::exit(1);
         }

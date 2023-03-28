@@ -182,8 +182,9 @@ pub fn load_kube_config() -> Result<Configuration, Error> {
         (_, (Some(u), Some(p))) => {
             let mut headers = header::HeaderMap::new();
 
-            let encoded = base64::encode(&format!("{}:{}", u, p));
-            let hv = header::HeaderValue::from_str(&format!("Basic {}", encoded))?;
+            use base64::Engine;
+            let encoded = base64::engine::general_purpose::STANDARD.encode(format!("{u}:{p}"));
+            let hv = header::HeaderValue::from_str(&format!("Basic {encoded}"))?;
 
             headers.insert(header::AUTHORIZATION, hv);
 

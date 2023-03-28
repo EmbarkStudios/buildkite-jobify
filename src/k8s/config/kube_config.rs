@@ -55,7 +55,10 @@ impl KubeConfigLoader {
         let pkey = PKey::private_key_from_pem(client_key)?;
 
         Pkcs12::builder()
-            .build(password, "kubeconfig", &pkey, &x509)
+            .name("kubeconfig")
+            .pkey(&pkey)
+            .cert(&x509)
+            .build2(password)
             .map_err(Error::from)
     }
 
